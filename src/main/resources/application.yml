@@ -1,0 +1,95 @@
+server:
+  port: 8086
+
+# 数据库配置
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/parking?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: Parking
+    password: aA135135@@@
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  # JPA配置
+  jpa:
+    database: mysql
+    database-platform: org.hibernate.dialect.MySQL8Dialect
+    hibernate:
+      ddl-auto: update  # 自动根据实体类创建/更新表结构
+    show-sql: true  # 显示SQL语句
+    properties:
+      hibernate:
+        format_sql: true  # 格式化SQL
+        use_sql_comments: true  # 显示SQL注释
+
+# MQTT配置
+mqtt:
+  broker-url: tcp://49.234.8.138:1883
+  client-id: parking_server
+  username: parking_device
+  password: Device@2025
+  # 订阅的主题列表
+  subscribe-topics:
+    - parking/#
+  # 发布的主题
+  publish-topic: parking/camera
+  # 连接配置
+  connection:
+    clean-session: true
+    connection-timeout: 30
+    keep-alive-interval: 60
+    automatic-reconnect: true
+    max-reconnect-delay: 128000
+  # QoS级别 (0,1,2)
+  qos: 1
+  # 是否保留消息
+  retained: false
+
+# 日志配置
+logging:
+  file:
+    path: D:/停车场/quare_api/logs
+    name: D:/停车场/quare_api/logs/quaer_api.log
+  level:
+    root: INFO
+    com.quaer_api: INFO
+    com.quaer_api.service.MqttClientService: INFO
+    com.quaer_api.service.MqttMessageHandler: INFO
+    org.eclipse.paho: INFO
+
+# 截图存储配置
+snapshot:
+  # 图片存储根目录（可选配置）
+  # 如果不配置，程序会自动根据操作系统选择：
+  #   Windows: D:/停车场/snapshots
+  #   Linux/Ubuntu: /opt/quaer_api/snapshots
+  # 如需自定义路径，取消下面的注释并修改路径
+  # base-dir: D:/停车场/snapshots
+
+# Square支付配置
+square:
+  # API配置
+  api-version: 2025-10-16
+  access-token: EAAAl9Se8DP-KKycVFi0HiFU_9-bHh0F9m9c3XvGaH6S7Oeuvp-VfiQWALTE0FYY
+  base-url: https://connect.squareup.com
+
+  # 商户配置
+  location-id: LYZ4X83G13CQK
+  environment: production
+  application-id: sq0idp-uSq1U9r96qjboOEDiqFD1A
+
+  # 终端设备配置
+  device-id: 533CS145C3000603  # 使用最新的设备号
+
+  # 默认货币
+  currency: CAD
+
+  # Webhook配置
+  webhook:
+    url: https://car.test001.cn:8083/api/payments/webhook
+    signature-key: y834xn53DXGniXAGr7NtCA
