@@ -26,6 +26,10 @@ public class MqttMessageHandler {
     @Autowired
     private SnapshotWhitelistService snapshotWhitelistService;
 
+    @Autowired
+    @org.springframework.context.annotation.Lazy
+    private LedDisplayService ledDisplayService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
@@ -163,9 +167,88 @@ public class MqttMessageHandler {
         log.info("  主题: {}", topic);
         log.info("  内容: {}", payload);
 
-        // TODO: 添加其他主题的处理逻辑
+        // 处理LED显示请求
+        if (topic.contains("/LED")) {
+            handleLedDisplayRequest(payload);
+        }
 
         log.info(">>> 其他消息处理完成");
+    }
+
+    /**
+     * 处理LED显示请求
+     * @param payload 消息内容
+     */
+    private void handleLedDisplayRequest(String payload) {
+        try {
+            log.info(">>> 处理LED显示请求");
+
+            // 解析JSON消息
+            com.fasterxml.jackson.databind.JsonNode rootNode = objectMapper.readTree(payload);
+
+            // 默认LED设备编号
+            String ledDeviceCid = "96:6E:6D:27:DC:9D";
+
+            // 尝试从新格式提取LED设备编号
+            if (rootNode.has("led_device_id") && !rootNode.get("led_device_id").isNull()) {
+                String ledDeviceId = rootNode.get("led_device_id").asText();
+                if (ledDeviceId != null && !ledDeviceId.trim().isEmpty()) {
+                    ledDeviceCid = ledDeviceId;
+                }
+            }
+            // 尝试从旧格式提取LED设备编号
+            else if (rootNode.has("exit_devices")) {
+                com.fasterxml.jackson.databind.JsonNode exitDevices = rootNode.get("exit_devices");
+                if (exitDevices.has("led_screen_config")) {
+                    String ledScreenConfig = exitDevices.get("led_screen_config").asText();
+                    if (ledScreenConfig != null && !ledScreenConfig.trim().isEmpty()) {
+                        ledDeviceCid = ledScreenConfig;
+                    }
+                }
+            }
+
+            // 提取车牌号（支持新旧格式）
+            String plateNumber = "";
+            if (rootNode.has("plate_number")) {
+                plateNumber = rootNode.get("plate_number").asText();
+            } else if (rootNode.has("plate")) {
+                com.fasterxml.jackson.databind.JsonNode plate = rootNode.get("plate");
+                if (plate.has("plate_number")) {
+                    plateNumber = plate.get("plate_number").asText();
+                }
+            }
+
+            // 提取车辆类型
+            String vehicleType = "临时车";
+            if (rootNode.has("vehicle_type")) {
+                vehicleType = rootNode.get("vehicle_type").asText();
+            }
+
+            // 提取显示文字
+            String displayText = "请稍候";  // 默认值
+            if (rootNode.has("display_text")) {
+                displayText = rootNode.get("display_text").asText();
+            }
+
+            // 如果车牌号为空，不处理
+            if (plateNumber == null || plateNumber.trim().isEmpty()) {
+                log.warn("⚠️ 车牌号为空，跳过处理");
+                return;
+            }
+
+            log.info("  LED设备编号: {}", ledDeviceCid);
+            log.info("  车牌号: {}", plateNumber);
+            log.info("  车辆类型: {}", vehicleType);
+            log.info("  显示文字: {}", displayText);
+
+            // 发送LED显示消息
+            ledDisplayService.sendVehicleWelcomeToLed(ledDeviceCid, plateNumber, vehicleType, displayText);
+
+            log.info("✅ LED显示请求处理成功");
+
+        } catch (Exception e) {
+            log.error("❌ 处理LED显示请求失败: {}", e.getMessage(), e);
+        }
     }
 
     /**
