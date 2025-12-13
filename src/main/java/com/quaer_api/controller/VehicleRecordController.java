@@ -2,6 +2,7 @@ package com.quaer_api.controller;
 
 import com.quaer_api.entity.VehicleRecord;
 import com.quaer_api.repository.VehicleRecordRepository;
+import com.quaer_api.service.SquareOnlinePaymentService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.FileSystemResource;
@@ -40,6 +41,9 @@ public class VehicleRecordController {
 
     @Autowired
     private VehicleRecordRepository vehicleRecordRepository;
+
+    @Autowired
+    private SquareOnlinePaymentService squareOnlinePaymentService;
 
     private static final String SNAPSHOT_BASE_DIR = "D:/停车场/snapshots";
 
@@ -248,6 +252,90 @@ public class VehicleRecordController {
             Map<String, Object> errorResponse = new HashMap<>();
             errorResponse.put("success", false);
             errorResponse.put("message", "获取统计信息失败: " + e.getMessage());
+            return ResponseEntity.status(500).body(errorResponse);
+        }
+    }
+
+    /**
+     * 批量为已有费用的记录生成支付链接
+     *
+     * 访问示例：
+     * http://localhost:8086/api/vehicle-records/generate-payment-links
+     */
+    @PostMapping("/generate-payment-links")
+    public ResponseEntity<Map<String, Object>> generatePaymentLinks() {
+        try {
+            log.info("========================================");
+            log.info("开始批量生成支付链接");
+            log.info("========================================");
+
+            // 查找所有有停车费但没有支付链接的记录（状态=exited，有费用，无支付URL）
+            Specification<VehicleRecord> spec = (root, query, criteriaBuilder) -> {
+                List<Predicate> predicates = new ArrayList<>();
+                predicates.add(criteriaBuilder.equal(root.get("status"), "exited"));
+                predicates.add(criteriaBuilder.isNotNull(root.get("parkingFeeCents")));
+                predicates.add(criteriaBuilder.greaterThan(root.get("parkingFeeCents"), 0));
+                predicates.add(criteriaBuilder.isNull(root.get("onlinePaymentUrl")));
+                return criteriaBuilder.and(predicates.toArray(new Predicate[0]));
+            };
+
+            List<VehicleRecord> records = vehicleRecordRepository.findAll(spec);
+
+            log.info("找到 {} 条需要生成支付链接的记录", records.size());
+
+            int successCount = 0;
+            int failureCount = 0;
+
+            for (VehicleRecord record : records) {
+                try {
+                    String description = "停车费 - " + (record.getEntryPlateNumber() != null ? record.getEntryPlateNumber() : record.getExitPlateNumber());
+
+                    // 生成支付链接
+                    SquareOnlinePaymentService.SquareOnlinePaymentResponse response =
+                            squareOnlinePaymentService.createPaymentLink(record.getParkingFeeCents(), description);
+
+                    if (response.isSuccess()) {
+                        // 保存支付链接到记录
+                        record.setOnlinePaymentUrl(response.getPaymentUrl());
+                        record.setOnlinePaymentLinkId(response.getPaymentLinkId());
+                        vehicleRecordRepository.save(record);
+
+                        log.info("✅ 记录ID: {} 支付链接生成成功", record.getId());
+                        successCount++;
+                    } else {
+                        log.error("❌ 记录ID: {} 支付链接生成失败: {}", record.getId(), response.getErrorMessage());
+                        failureCount++;
+                    }
+
+                    // 避免请求过快,暂停100ms
+                    Thread.sleep(100);
+
+                } catch (Exception e) {
+                    log.error("❌ 记录ID: {} 处理失败: {}", record.getId(), e.getMessage());
+                    failureCount++;
+                }
+            }
+
+            log.info("========================================");
+            log.info("批量生成完成");
+            log.info("  成功: {} 条", successCount);
+            log.info("  失败: {} 条", failureCount);
+            log.info("========================================");
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("totalRecords", records.size());
+            response.put("successCount", successCount);
+            response.put("failureCount", failureCount);
+            response.put("message", String.format("批量生成完成: 成功 %d 条, 失败 %d 条", successCount, failureCount));
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("批量生成支付链接失败", e);
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("success", false);
+            errorResponse.put("message", "批量生成失败: " + e.getMessage());
             return ResponseEntity.status(500).body(errorResponse);
         }
     }

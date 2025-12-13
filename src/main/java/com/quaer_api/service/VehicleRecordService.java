@@ -33,6 +33,9 @@ public class VehicleRecordService {
     private SquareTerminalService squareTerminalService;
 
     @Autowired
+    private SquareOnlinePaymentService squareOnlinePaymentService;
+
+    @Autowired
     private PaymentOrderRepository paymentOrderRepository;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -319,7 +322,8 @@ public class VehicleRecordService {
                     }
                     log.info("=".repeat(80));
 
-                    // 调用支付服务，发起终端支付
+                    // 🔥 同时发起两种支付方式
+                    // 1️⃣ 终端支付（POS机）
                     String paymentResponse;
                     if (paymentDeviceId != null && !paymentDeviceId.trim().isEmpty()) {
                         paymentResponse = squareTerminalService.createTerminalCheckout(updated.getParkingFeeCents(), paymentDeviceId);
@@ -327,8 +331,25 @@ public class VehicleRecordService {
                         paymentResponse = squareTerminalService.createTerminalCheckout(updated.getParkingFeeCents());
                     }
 
-                    log.info("📱 支付请求已发送到终端设备");
-                    log.info("响应: {}", paymentResponse);
+                    log.info("📱 终端支付请求已发送到设备");
+                    log.info("终端支付响应: {}", paymentResponse);
+
+                    // 2️⃣ 在线支付（二维码）
+                    String paymentDescription = "停车费 - " + updated.getEntryPlateNumber();
+                    SquareOnlinePaymentService.SquareOnlinePaymentResponse onlinePaymentResponse =
+                        squareOnlinePaymentService.createPaymentLink(updated.getParkingFeeCents(), paymentDescription);
+
+                    if (onlinePaymentResponse.isSuccess()) {
+                        log.info("💳 在线支付链接创建成功");
+                        log.info("支付URL: {}", onlinePaymentResponse.getPaymentUrl());
+
+                        // 将支付URL保存到车辆记录中，供前端显示二维码
+                        updated.setOnlinePaymentUrl(onlinePaymentResponse.getPaymentUrl());
+                        updated.setOnlinePaymentLinkId(onlinePaymentResponse.getPaymentLinkId());
+                        vehicleRecordRepository.save(updated);
+                    } else {
+                        log.warn("⚠️ 在线支付链接创建失败: {}", onlinePaymentResponse.getErrorMessage());
+                    }
 
                     // 解析响应并创建支付记录
                     if (paymentResponse != null && !paymentResponse.startsWith("Error:") && !paymentResponse.startsWith("Exception:")) {

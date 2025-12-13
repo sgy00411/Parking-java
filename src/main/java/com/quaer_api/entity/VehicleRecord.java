@@ -117,7 +117,7 @@ public class VehicleRecord {
 
     // ========== 支付相关字段 ==========
     /**
-     * 支付状态: null/unpaid-未支付, paid-已支付, failed-支付失败
+     * 支付状态: null/unpaid-未支付, paid-已支付, failed-支付失败, pending-待支付
      */
     @Column(name = "payment_status", length = 20)
     private String paymentStatus;
@@ -133,6 +133,18 @@ public class VehicleRecord {
      */
     @Column(name = "payment_time")
     private LocalDateTime paymentTime;
+
+    /**
+     * Square在线支付链接URL（用于前端生成二维码）
+     */
+    @Column(name = "online_payment_url", length = 500)
+    private String onlinePaymentUrl;
+
+    /**
+     * Square在线支付链接ID
+     */
+    @Column(name = "online_payment_link_id", length = 100)
+    private String onlinePaymentLinkId;
 
     // ========== 时间戳 ==========
     @Column(name = "created_at", updatable = false)
