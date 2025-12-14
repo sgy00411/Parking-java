@@ -234,7 +234,17 @@ public class SquareWebhookService {
         }
 
         // === 状态信息 ===
-        order.setStatus(payment.path("status").asText("UNKNOWN"));
+        // 状态更新保护：只允许状态向更高优先级转换
+        String newStatus = payment.path("status").asText("UNKNOWN");
+        String currentStatus = order.getStatus();
+
+        if (shouldUpdateStatus(currentStatus, newStatus)) {
+            order.setStatus(newStatus);
+            log.debug("✅ 状态更新: {} -> {}", currentStatus, newStatus);
+        } else {
+            log.warn("⚠️ 拒绝状态降级: {} -> {} (保持当前状态)", currentStatus, newStatus);
+        }
+
         order.setSourceType(payment.path("source_type").asText(null));
 
         // === 时间信息 ===
@@ -305,6 +315,43 @@ public class SquareWebhookService {
             order.setCardExpYear(card.path("exp_year").asInt(0));
             order.setCardFingerprint(card.path("fingerprint").asText(null));
         }
+    }
+
+    /**
+     * 判断是否应该更新状态（状态优先级保护）
+     * 状态优先级：COMPLETED > FAILED > CANCELED > APPROVED > PENDING > UNKNOWN
+     */
+    private boolean shouldUpdateStatus(String currentStatus, String newStatus) {
+        if (currentStatus == null || currentStatus.isEmpty()) {
+            return true; // 没有当前状态，允许设置任何新状态
+        }
+
+        if (currentStatus.equals(newStatus)) {
+            return true; // 相同状态，允许更新（刷新其他字段）
+        }
+
+        int currentPriority = getStatusPriority(currentStatus);
+        int newPriority = getStatusPriority(newStatus);
+
+        // 只允许状态向更高优先级转换
+        return newPriority >= currentPriority;
+    }
+
+    /**
+     * 获取支付状态的优先级
+     */
+    private int getStatusPriority(String status) {
+        if (status == null) return 0;
+
+        return switch (status) {
+            case "COMPLETED" -> 100;  // 最终完成状态，最高优先级
+            case "FAILED" -> 90;      // 失败状态
+            case "CANCELED" -> 85;    // 取消状态
+            case "APPROVED" -> 50;    // 已批准但未完成
+            case "PENDING" -> 30;     // 待处理
+            case "AUTHORIZED" -> 40;  // 已授权
+            default -> 10;            // 未知状态，最低优先级
+        };
     }
 
     /**

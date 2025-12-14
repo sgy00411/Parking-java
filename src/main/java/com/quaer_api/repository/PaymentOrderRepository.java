@@ -1,6 +1,8 @@
 package com.quaer_api.repository;
 
 import com.quaer_api.entity.PaymentOrder;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
@@ -20,6 +22,11 @@ public interface PaymentOrderRepository extends JpaRepository<PaymentOrder, Long
     Optional<PaymentOrder> findByReferenceId(String referenceId);
     Optional<PaymentOrder> findByReceiptNumber(String receiptNumber);
     Optional<PaymentOrder> findByOrderId(String orderId);
+    Optional<PaymentOrder> findByVehicleRecordId(Long vehicleRecordId);
+
+    // 分页查询方法
+    Page<PaymentOrder> findByStatus(String status, Pageable pageable);
+    Page<PaymentOrder> findByPaymentSource(String paymentSource, Pageable pageable);
 
     // ==================== 统计查询方法 ====================
 

@@ -68,5 +68,10 @@ public class SquareProperties {
          * 签名密钥
          */
         private String signatureKey;
+
+        /**
+         * Subscription ID
+         */
+        private String subscriptionId;
     }
 }

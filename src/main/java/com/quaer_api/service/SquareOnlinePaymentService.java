@@ -127,9 +127,13 @@ public class SquareOnlinePaymentService {
                         String paymentUrl = paymentLinkNode.path("url").asText();
                         String longUrl = paymentLinkNode.path("long_url").asText();
 
+                        // 提取Square自动生成的order_id（如果有）
+                        String squareOrderId = paymentLinkNode.path("order_id").asText(null);
+
                         log.info("-".repeat(80));
                         log.info("✅ 在线支付链接创建成功!");
                         log.info("  Payment Link ID: {}", paymentLinkId);
+                        log.info("  Square Order ID: {}", squareOrderId);
                         log.info("  支付URL (短): {}", paymentUrl);
                         log.info("  支付URL (长): {}", longUrl);
                         log.info("-".repeat(80));
@@ -140,7 +144,7 @@ public class SquareOnlinePaymentService {
                         result.setPaymentLinkId(paymentLinkId);
                         result.setPaymentUrl(paymentUrl);
                         result.setLongUrl(longUrl);
-                        result.setOrderId(orderId);
+                        result.setOrderId(squareOrderId != null ? squareOrderId : orderId);
                         result.setAmountInCents(amountInCents);
                         result.setDescription(description);
 

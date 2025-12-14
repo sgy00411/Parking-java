@@ -2,6 +2,7 @@ package com.quaer_api.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.quaer_api.config.SquareProperties;
 import com.quaer_api.dto.MqttEntryMessage;
 import com.quaer_api.dto.MqttExitMessage;
 import com.quaer_api.entity.PaymentOrder;
@@ -37,6 +38,9 @@ public class VehicleRecordService {
 
     @Autowired
     private PaymentOrderRepository paymentOrderRepository;
+
+    @Autowired
+    private SquareProperties squareProperties;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -347,6 +351,40 @@ public class VehicleRecordService {
                         updated.setOnlinePaymentUrl(onlinePaymentResponse.getPaymentUrl());
                         updated.setOnlinePaymentLinkId(onlinePaymentResponse.getPaymentLinkId());
                         vehicleRecordRepository.save(updated);
+
+                        // 立即创建PaymentOrder记录，关联到车辆记录
+                        // 这样webhook收到支付完成通知时，能通过order_id找到这个PaymentOrder
+                        // 并自动更新车辆记录的支付状态
+                        try {
+                            PaymentOrder onlinePaymentOrder = new PaymentOrder();
+
+                            // 关联车辆记录ID - 关键！
+                            onlinePaymentOrder.setVehicleRecordId(updated.getId());
+
+                            // 设置Order ID（Square自动生成的）
+                            onlinePaymentOrder.setOrderId(onlinePaymentResponse.getOrderId());
+
+                            // 设置金额信息
+                            onlinePaymentOrder.setAmount((long) updated.getParkingFeeCents());
+                            onlinePaymentOrder.setCurrency(squareProperties.getCurrency());
+
+                            // 设置状态和来源
+                            onlinePaymentOrder.setStatus("PENDING");
+                            onlinePaymentOrder.setPaymentSource("ONLINE");
+
+                            // 设置备注
+                            onlinePaymentOrder.setNote("在线支付 - 车牌: " + updated.getEntryPlateNumber());
+
+                            // 保存支付记录
+                            PaymentOrder savedOnlineOrder = paymentOrderRepository.save(onlinePaymentOrder);
+
+                            log.info("💾 在线支付记录已创建 | 支付记录ID: {} | Order ID: {} | 车辆记录ID: {}",
+                                savedOnlineOrder.getId(), onlinePaymentResponse.getOrderId(), updated.getId());
+
+                        } catch (Exception e) {
+                            log.error("❌ 创建在线支付记录失败 | 车辆记录ID: {} | 错误: {}",
+                                updated.getId(), e.getMessage(), e);
+                        }
                     } else {
                         log.warn("⚠️ 在线支付链接创建失败: {}", onlinePaymentResponse.getErrorMessage());
                     }

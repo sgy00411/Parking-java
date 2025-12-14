@@ -91,5 +91,6 @@ square:
 
   # Webhook配置
   webhook:
-    url: https://car.test001.cn:8083/api/payments/webhook
-    signature-key: y834xn53DXGniXAGr7NtCA
+    url: https://test001.cn/api/webhook
+    signature-key: cgiQxKBulpakC7wgn3XNtg
+    subscription-id: wbhk_ac20c56913ad456780688146bb12cdd5

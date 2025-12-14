@@ -1,6 +1,8 @@
 package com.quaer_api.controller;
 
+import com.quaer_api.entity.PaymentOrder;
 import com.quaer_api.entity.VehicleRecord;
+import com.quaer_api.repository.PaymentOrderRepository;
 import com.quaer_api.repository.VehicleRecordRepository;
 import com.quaer_api.service.SquareOnlinePaymentService;
 import com.quaer_api.service.SquareTerminalService;
@@ -42,6 +44,9 @@ public class VehicleRecordController {
 
     @Autowired
     private VehicleRecordRepository vehicleRecordRepository;
+
+    @Autowired
+    private PaymentOrderRepository paymentOrderRepository;
 
     @Autowired
     private SquareOnlinePaymentService squareOnlinePaymentService;
@@ -335,12 +340,28 @@ public class VehicleRecordController {
                 if (onlineResponse.isSuccess()) {
                     onlinePaymentUrl = onlineResponse.getPaymentUrl();
                     onlinePaymentLinkId = onlineResponse.getPaymentLinkId();
+                    String squareOrderId = onlineResponse.getOrderId();
 
-                    // 保存在线支付链接
+                    // 保存在线支付链接到车辆记录
                     record.setOnlinePaymentUrl(onlinePaymentUrl);
                     record.setOnlinePaymentLinkId(onlinePaymentLinkId);
                     record.setPaymentStatus("pending");
                     vehicleRecordRepository.save(record);
+
+                    // 🔥 关键修复：同时创建payment_orders记录，保存vehicle_record_id和order_id
+                    // 这样webhook回来时就能找到记录并更新车辆记录的支付状态
+                    PaymentOrder paymentOrder = new PaymentOrder();
+                    paymentOrder.setOrderId(squareOrderId);
+                    paymentOrder.setVehicleRecordId(id);  // 保存车辆记录ID
+                    paymentOrder.setAmount(record.getParkingFeeCents().longValue());  // Integer转Long
+                    paymentOrder.setCurrency("CAD");
+                    paymentOrder.setStatus("PENDING");
+                    paymentOrder.setPaymentSource("ONLINE");
+                    paymentOrder.setNote("在线支付 - " + description);
+                    paymentOrderRepository.save(paymentOrder);
+
+                    log.info("✅ PaymentOrder记录已创建: OrderID={}, VehicleRecordID={}, Amount={}",
+                            squareOrderId, id, record.getParkingFeeCents());
 
                     onlineSuccess = true;
                     log.info("✅ 在线支付链接已生成: {}", onlinePaymentUrl);
@@ -432,6 +453,19 @@ public class VehicleRecordController {
                             squareOnlinePaymentService.createPaymentLink(record.getParkingFeeCents(), description);
 
                     if (response.isSuccess()) {
+                        // 创建PaymentOrder记录并关联vehicle_record_id
+                        PaymentOrder paymentOrder = new PaymentOrder();
+                        paymentOrder.setOrderId(response.getOrderId());
+                        paymentOrder.setVehicleRecordId(record.getId().longValue());
+                        paymentOrder.setAmount(record.getParkingFeeCents().longValue());
+                        paymentOrder.setCurrency("CAD");
+                        paymentOrder.setStatus("PENDING");
+                        paymentOrder.setPaymentSource("ONLINE");
+                        paymentOrder.setNote(description);
+                        paymentOrderRepository.save(paymentOrder);
+
+                        log.info("✅ 创建PaymentOrder记录: OrderID={}, VehicleRecordID={}", response.getOrderId(), record.getId());
+
                         // 保存支付链接到记录
                         record.setOnlinePaymentUrl(response.getPaymentUrl());
                         record.setOnlinePaymentLinkId(response.getPaymentLinkId());
