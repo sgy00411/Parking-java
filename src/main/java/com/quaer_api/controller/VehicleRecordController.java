@@ -3,6 +3,7 @@ package com.quaer_api.controller;
 import com.quaer_api.entity.VehicleRecord;
 import com.quaer_api.repository.VehicleRecordRepository;
 import com.quaer_api.service.SquareOnlinePaymentService;
+import com.quaer_api.service.SquareTerminalService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.FileSystemResource;
@@ -44,6 +45,9 @@ public class VehicleRecordController {
 
     @Autowired
     private SquareOnlinePaymentService squareOnlinePaymentService;
+
+    @Autowired
+    private SquareTerminalService squareTerminalService;
 
     private static final String SNAPSHOT_BASE_DIR = "D:/停车场/snapshots";
 
@@ -252,6 +256,139 @@ public class VehicleRecordController {
             Map<String, Object> errorResponse = new HashMap<>();
             errorResponse.put("success", false);
             errorResponse.put("message", "获取统计信息失败: " + e.getMessage());
+            return ResponseEntity.status(500).body(errorResponse);
+        }
+    }
+
+    /**
+     * 手动发起双通道支付(终端 + 在线)
+     *
+     * 访问示例：
+     * POST http://localhost:8086/api/vehicle-records/{id}/initiate-payment
+     *
+     * @param id 车辆记录ID
+     * @param paymentDeviceId 终端设备ID(可选)
+     * @return 支付结果
+     */
+    @PostMapping("/{id}/initiate-payment")
+    public ResponseEntity<Map<String, Object>> initiatePayment(
+            @PathVariable Long id,
+            @RequestParam(value = "paymentDeviceId", required = false) String paymentDeviceId
+    ) {
+        try {
+            log.info("========================================");
+            log.info("手动发起双通道支付: 记录ID={}, 设备ID={}", id, paymentDeviceId);
+            log.info("========================================");
+
+            // 查找记录
+            VehicleRecord record = vehicleRecordRepository.findById(id)
+                    .orElseThrow(() -> new RuntimeException("记录不存在: " + id));
+
+            // 检查是否有停车费
+            if (record.getParkingFeeCents() == null || record.getParkingFeeCents() <= 0) {
+                Map<String, Object> errorResponse = new HashMap<>();
+                errorResponse.put("success", false);
+                errorResponse.put("message", "该记录没有停车费,无法发起支付");
+                return ResponseEntity.badRequest().body(errorResponse);
+            }
+
+            // 检查是否已支付
+            if ("paid".equals(record.getPaymentStatus())) {
+                Map<String, Object> errorResponse = new HashMap<>();
+                errorResponse.put("success", false);
+                errorResponse.put("message", "该记录已支付,无需重复支付");
+                return ResponseEntity.badRequest().body(errorResponse);
+            }
+
+            // 1️⃣ 发起终端支付
+            String terminalPaymentResponse = null;
+            boolean terminalSuccess = false;
+            try {
+                if (paymentDeviceId != null && !paymentDeviceId.trim().isEmpty()) {
+                    terminalPaymentResponse = squareTerminalService.createTerminalCheckout(
+                            record.getParkingFeeCents(), paymentDeviceId);
+                } else if (record.getExitPaymentDeviceId() != null) {
+                    terminalPaymentResponse = squareTerminalService.createTerminalCheckout(
+                            record.getParkingFeeCents(), record.getExitPaymentDeviceId());
+                } else {
+                    terminalPaymentResponse = squareTerminalService.createTerminalCheckout(
+                            record.getParkingFeeCents());
+                }
+                terminalSuccess = true;
+                log.info("✅ 终端支付请求已发送");
+            } catch (Exception e) {
+                log.error("❌ 终端支付失败: {}", e.getMessage());
+                terminalPaymentResponse = "终端支付失败: " + e.getMessage();
+            }
+
+            // 2️⃣ 发起在线支付
+            String onlinePaymentUrl = null;
+            String onlinePaymentLinkId = null;
+            boolean onlineSuccess = false;
+            try {
+                String description = "停车费 - " +
+                    (record.getEntryPlateNumber() != null ? record.getEntryPlateNumber() : record.getExitPlateNumber());
+
+                SquareOnlinePaymentService.SquareOnlinePaymentResponse onlineResponse =
+                        squareOnlinePaymentService.createPaymentLink(record.getParkingFeeCents(), description);
+
+                if (onlineResponse.isSuccess()) {
+                    onlinePaymentUrl = onlineResponse.getPaymentUrl();
+                    onlinePaymentLinkId = onlineResponse.getPaymentLinkId();
+
+                    // 保存在线支付链接
+                    record.setOnlinePaymentUrl(onlinePaymentUrl);
+                    record.setOnlinePaymentLinkId(onlinePaymentLinkId);
+                    record.setPaymentStatus("pending");
+                    vehicleRecordRepository.save(record);
+
+                    onlineSuccess = true;
+                    log.info("✅ 在线支付链接已生成: {}", onlinePaymentUrl);
+                } else {
+                    log.error("❌ 在线支付失败: {}", onlineResponse.getErrorMessage());
+                }
+            } catch (Exception e) {
+                log.error("❌ 在线支付失败: {}", e.getMessage());
+            }
+
+            // 构建响应
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", terminalSuccess || onlineSuccess);
+            response.put("recordId", id);
+            response.put("amount", record.getParkingFeeCents());
+
+            Map<String, Object> terminalResult = new HashMap<>();
+            terminalResult.put("success", terminalSuccess);
+            terminalResult.put("response", terminalPaymentResponse);
+            response.put("terminal", terminalResult);
+
+            Map<String, Object> onlineResult = new HashMap<>();
+            onlineResult.put("success", onlineSuccess);
+            onlineResult.put("paymentUrl", onlinePaymentUrl);
+            onlineResult.put("paymentLinkId", onlinePaymentLinkId);
+            response.put("online", onlineResult);
+
+            if (terminalSuccess && onlineSuccess) {
+                response.put("message", "终端支付和在线支付已同时发起");
+            } else if (terminalSuccess) {
+                response.put("message", "仅终端支付成功,在线支付失败");
+            } else if (onlineSuccess) {
+                response.put("message", "仅在线支付成功,终端支付失败");
+            } else {
+                response.put("message", "终端支付和在线支付均失败");
+            }
+
+            log.info("========================================");
+            log.info("双通道支付发起完成: 终端={}, 在线={}", terminalSuccess, onlineSuccess);
+            log.info("========================================");
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("发起支付失败", e);
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("success", false);
+            errorResponse.put("message", "发起支付失败: " + e.getMessage());
             return ResponseEntity.status(500).body(errorResponse);
         }
     }
