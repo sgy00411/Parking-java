@@ -38,9 +38,9 @@ public class PaymentTestController {
         log.info("  描述: {}", description);
         log.info("========================================");
 
-        // 调用服务创建支付链接
+        // 调用服务创建支付链接（测试环境使用null，会自动使用配置文件的默认location_id）
         SquareOnlinePaymentService.SquareOnlinePaymentResponse response =
-            squareOnlinePaymentService.createPaymentLink(amount, description);
+            squareOnlinePaymentService.createPaymentLink(amount, description, null);
 
         if (response.isSuccess()) {
             log.info("测试支付链接创建成功!");
@@ -64,6 +64,6 @@ public class PaymentTestController {
     @GetMapping("/quick")
     public SquareOnlinePaymentService.SquareOnlinePaymentResponse createQuickPayment() {
         log.info("快速测试支付 - 固定金额 $1.00");
-        return squareOnlinePaymentService.createPaymentLink(100, "测试停车费 - 快速测试");
+        return squareOnlinePaymentService.createPaymentLink(100, "测试停车费 - 快速测试", null);
     }
 }

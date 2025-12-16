@@ -64,12 +64,10 @@ logging:
 
 # 截图存储配置
 snapshot:
-  # 图片存储根目录（可选配置）
-  # 如果不配置，程序会自动根据操作系统选择：
-  #   Windows: D:/停车场/snapshots
-  #   Linux/Ubuntu: /opt/quaer_api/snapshots
-  # 如需自定义路径，取消下面的注释并修改路径
-  # base-dir: D:/停车场/snapshots
+  # 图片存储根目录
+  # Linux服务器使用此路径
+  base-dir: /opt/quaer_api/snapshots
+  # Windows开发环境使用：D:/停车场/snapshots
 
 # Square支付配置
 square:

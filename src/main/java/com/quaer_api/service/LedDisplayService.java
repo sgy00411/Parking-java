@@ -158,6 +158,28 @@ public class LedDisplayService {
     }
 
     /**
+     * 显示支付界面到指定LED设备
+     * @param ledDeviceCid LED设备编号
+     * @param request 支付场景请求
+     */
+    public void showPaySceneToDevice(String ledDeviceCid, LedPaySceneRequest request) {
+        Map<String, Object> message = createBaseMessage("template", "start_pay_scene");
+        message.put("device_cid", ledDeviceCid);  // 使用指定的LED设备编号
+
+        Map<String, Object> config = new HashMap<>();
+        config.put("show_time", request.getShowTime());
+        config.put("qrcode", request.getQrcode());
+        config.put("voice", request.getVoice());
+        config.put("text_list", request.getTextList());
+
+        message.put("config", config);
+
+        // 发送到指定LED设备的主题
+        String topic = getPrivateTopicForDevice(ledDeviceCid);
+        sendMqttMessage(topic, message);
+    }
+
+    /**
      * 显示无牌车扫码界面
      */
     public void showUnlicensedScene(String qrcode, String voice, List<LedTextItem> textList) {
@@ -246,20 +268,91 @@ public class LedDisplayService {
     }
 
     /**
-     * 发送车辆欢迎信息到指定LED设备
+     * 发送车辆付款信息到指定LED设备
      * @param ledDeviceCid LED设备编号
      * @param licensePlate 车牌号
-     * @param vehicleType 车辆类型
-     * @param displayText 显示文字（如：请稍候、请付款、请通行）
+     * @param durationSeconds 停车时长（秒）
+     * @param parkingFeeCents 停车费用（美分，直接显示）
      */
-    public void sendVehicleWelcomeToLed(String ledDeviceCid, String licensePlate, String vehicleType, String displayText) {
+    public void sendVehicleWelcomeToLed(String ledDeviceCid, String licensePlate, Integer durationSeconds, Integer parkingFeeCents) {
         List<LedTextItem> textList = new ArrayList<>();
 
-        // 第一行：车辆类型（红色）
+        // 第一行：车牌号（绿色）
         LedTextItem line1 = new LedTextItem();
         line1.setLid(0);
-        line1.setText(vehicleType);
-        line1.setColor(LedTextColor.red());
+        line1.setText(licensePlate);
+        line1.setColor(LedTextColor.green());
+        textList.add(line1);
+
+        // 第二行：固定文本 "Time Parked:" （黄色）
+        LedTextItem line2 = new LedTextItem();
+        line2.setLid(1);
+        line2.setText("Time Parked:");
+        line2.setColor(LedTextColor.yellow());
+        textList.add(line2);
+
+        // 第三行：停车时长 "XX hrs XX mins" （白色）
+        LedTextItem line3 = new LedTextItem();
+        line3.setLid(2);
+        if (durationSeconds != null && durationSeconds > 0) {
+            int hours = durationSeconds / 3600;
+            int minutes = (durationSeconds % 3600) / 60;
+            line3.setText(String.format("%d hrs %d mins", hours, minutes));
+        } else {
+            line3.setText("0 hrs 0 mins");
+        }
+        line3.setColor(LedTextColor.white());
+        textList.add(line3);
+
+        // 第四行：固定文本 "Please Pay:" （黄色）
+        LedTextItem line4 = new LedTextItem();
+        line4.setLid(3);
+        line4.setText("Please Pay:");
+        line4.setColor(LedTextColor.yellow());
+        textList.add(line4);
+
+        // 第五行：费用 "$XX.XX" （红色）
+        LedTextItem line5 = new LedTextItem();
+        line5.setLid(4);
+        if (parkingFeeCents != null && parkingFeeCents > 0) {
+            // 直接显示原始数值（已经是美分）
+            line5.setText(String.format("$%d", parkingFeeCents));
+        } else {
+            line5.setText("$0");
+        }
+        line5.setColor(LedTextColor.red());
+        textList.add(line5);
+
+        // 创建消息并发送到指定LED设备
+        Map<String, Object> message = createBaseMessage("template", "start_passing_scene");
+        message.put("device_cid", ledDeviceCid);  // 使用指定的LED设备编号
+
+        Map<String, Object> config = new HashMap<>();
+        config.put("show_time", 60);
+        config.put("voice", "Please Pay");
+        config.put("text_list", textList);
+
+        message.put("config", config);
+
+        // 发送到指定LED设备的主题
+        String topic = getPrivateTopicForDevice(ledDeviceCid);
+        sendMqttMessage(topic, message);
+    }
+
+    /**
+     * 发送车辆入场欢迎信息到指定LED设备
+     * @param ledDeviceCid LED设备编号
+     * @param licensePlate 车牌号
+     * @param vehicleType 车辆类型（中文）
+     */
+    public void sendVehicleEntryToLed(String ledDeviceCid, String licensePlate, String vehicleType) {
+        List<LedTextItem> textList = new ArrayList<>();
+
+        // 第一行：固定文本 "License Plate#" （白色）
+        LedTextItem line1 = new LedTextItem();
+        line1.setLid(0);
+        line1.setText("License Plate#");
+        line1.setColor(LedTextColor.white());
         textList.add(line1);
 
         // 第二行：车牌号（绿色）
@@ -269,28 +362,18 @@ public class LedDisplayService {
         line2.setColor(LedTextColor.green());
         textList.add(line2);
 
-        // 第三行：欢迎光临（黄色）
+        // 第三行：车辆类型（映射为英文）（黄色）
         LedTextItem line3 = new LedTextItem();
         line3.setLid(2);
-        line3.setText("欢迎光临");
+        line3.setText(mapVehicleTypeToEnglish(vehicleType));
         line3.setColor(LedTextColor.yellow());
         textList.add(line3);
 
-        // 第四行：根据显示文字设置颜色
+        // 第四行：固定文本 "Vehicle Released" （绿色）
         LedTextItem line4 = new LedTextItem();
         line4.setLid(3);
-        line4.setText(displayText);
-
-        // 根据显示文字设置颜色
-        // "请稍候" → 红色
-        // "请付款" → 红色
-        // "请通行" → 绿色
-        if ("请通行".equals(displayText)) {
-            line4.setColor(LedTextColor.green());
-        } else {
-            // "请稍候" 和 "请付款" 都显示红色
-            line4.setColor(LedTextColor.red());
-        }
+        line4.setText("Vehicle Released");
+        line4.setColor(LedTextColor.green());
         textList.add(line4);
 
         // 创建消息并发送到指定LED设备
@@ -299,7 +382,7 @@ public class LedDisplayService {
 
         Map<String, Object> config = new HashMap<>();
         config.put("show_time", 60);
-        config.put("voice", "欢迎光临");
+        config.put("voice", "Welcome");
         config.put("text_list", textList);
 
         message.put("config", config);
@@ -307,5 +390,36 @@ public class LedDisplayService {
         // 发送到指定LED设备的主题
         String topic = getPrivateTopicForDevice(ledDeviceCid);
         sendMqttMessage(topic, message);
+    }
+
+    /**
+     * 将车辆类型从中文映射为英文
+     * @param vehicleType 车辆类型（中文）
+     * @return 英文车辆类型
+     */
+    private String mapVehicleTypeToEnglish(String vehicleType) {
+        if (vehicleType == null || vehicleType.trim().isEmpty()) {
+            return "Pay Parking";  // 默认值
+        }
+
+        String type = vehicleType.trim();
+
+        // 临时车
+        if (type.equals("临时车")) {
+            return "Pay Parking";
+        }
+
+        // 月卡/年卡
+        if (type.contains("月卡") || type.contains("年卡")) {
+            return "Valid Passholder";
+        }
+
+        // 管理员车辆
+        if (type.contains("管理") || type.contains("管理员")) {
+            return "Management Pass";
+        }
+
+        // 默认返回临时车
+        return "Pay Parking";
     }
 }

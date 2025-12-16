@@ -35,9 +35,10 @@ public class SquareOnlinePaymentService {
      *
      * @param amountInCents 支付金额（分）
      * @param description 支付描述（例如：车牌号）
+     * @param locationId 商户位置ID（如果为null则使用配置文件默认值）
      * @return 包含支付链接和订单ID的响应
      */
-    public SquareOnlinePaymentResponse createPaymentLink(long amountInCents, String description) {
+    public SquareOnlinePaymentResponse createPaymentLink(long amountInCents, String description, String locationId) {
         try {
             log.info("=".repeat(80));
             log.info("准备创建 Square 在线支付链接 - 时间: {}", getCurrentTime());
@@ -61,9 +62,14 @@ public class SquareOnlinePaymentService {
             priceMoney.put("currency", squareProperties.getCurrency());
             priceMoney.put("amount", amountInCents);
 
+            // 确定使用的location_id：优先使用传入的值，否则使用配置文件默认值
+            String useLocationId = (locationId != null && !locationId.trim().isEmpty())
+                ? locationId
+                : squareProperties.getLocationId();
+
             // 设置quick_pay
             quickPay.put("name", description != null ? description : "停车费");
-            quickPay.put("location_id", squareProperties.getLocationId());
+            quickPay.put("location_id", useLocationId);
             quickPay.set("price_money", priceMoney);
 
             // 组装请求
@@ -73,7 +79,7 @@ public class SquareOnlinePaymentService {
             log.info("请求信息:");
             log.info("  API URL: {}", url);
             log.info("  API Version: {}", squareProperties.getApiVersion());
-            log.info("  Location ID: {}", squareProperties.getLocationId());
+            log.info("  Location ID: {}", useLocationId);
             log.info("  支付金额: {} {}", formatAmount(amountInCents), squareProperties.getCurrency());
             log.info("  支付描述: {}", description);
             log.info("  订单ID: {}", orderId);

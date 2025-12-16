@@ -116,6 +116,12 @@ public class VehicleRecordService {
             record.setEntryWeight(message.getEntryWeight());
             record.setEntrySnapshot(message.getEntrySnapshot());
 
+            // 设置设备配置
+            record.setPaymentDeviceId(message.getPaymentDeviceId());
+            record.setLedScreenConfig(message.getLedScreenConfig());
+            record.setBarrierGateId(message.getBarrierGateId());
+            record.setBackupChannelId(message.getBackupChannelId());
+
             // 保存到数据库
             VehicleRecord saved = vehicleRecordRepository.save(record);
 
@@ -154,6 +160,12 @@ public class VehicleRecordService {
             record.setEntryDetectionCount(message.getEntryDetectionCount());
             record.setEntryWeight(message.getEntryWeight());
             record.setEntrySnapshot(message.getEntrySnapshot());
+
+            // 更新设备配置
+            record.setPaymentDeviceId(message.getPaymentDeviceId());
+            record.setLedScreenConfig(message.getLedScreenConfig());
+            record.setBarrierGateId(message.getBarrierGateId());
+            record.setBackupChannelId(message.getBackupChannelId());
 
             // 保持状态为 entered
             record.setStatus("entered");
@@ -275,6 +287,12 @@ public class VehicleRecordService {
             record.setExitSnapshot(message.getExitSnapshot());
             record.setDurationSeconds(durationSeconds);
 
+            // 用出场消息的设备配置覆盖更新原有的设备配置
+            record.setPaymentDeviceId(message.getPaymentDeviceId());
+            record.setLedScreenConfig(message.getLedScreenConfig());
+            record.setBarrierGateId(message.getBarrierGateId());
+            record.setBackupChannelId(message.getBackupChannelId());
+
             // 针对所有正常出场记录，计算停车时长和费用
             if (entryTime != null) {
                 // 计算停车时长（分钟），不足1分钟按1分钟计算
@@ -317,10 +335,10 @@ public class VehicleRecordService {
                     log.info("=".repeat(80));
                     log.info("🔔 触发支付流程 | 记录ID: {} | 金额: {}美分", updated.getId(), updated.getParkingFeeCents());
 
-                    // 获取支付设备ID（优先使用消息中的设备ID，如果为空则使用配置文件中的默认值）
-                    String paymentDeviceId = updated.getExitPaymentDeviceId();
+                    // 获取支付设备ID（优先使用出场消息中的设备ID，如果为空则使用配置文件中的默认值）
+                    String paymentDeviceId = updated.getPaymentDeviceId();
                     if (paymentDeviceId != null && !paymentDeviceId.trim().isEmpty()) {
-                        log.info("📟 使用消息中的支付设备ID: {}", paymentDeviceId);
+                        log.info("📟 使用出场消息中的支付设备ID: {}", paymentDeviceId);
                     } else {
                         log.info("📟 使用默认支付设备ID（配置文件）");
                     }
@@ -340,8 +358,11 @@ public class VehicleRecordService {
 
                     // 2️⃣ 在线支付（二维码）
                     String paymentDescription = "停车费 - " + updated.getEntryPlateNumber();
+                    String locationId = updated.getParkingLotCode();
+                    log.info("📍 使用记录中的停车场编号作为Location ID: {}", locationId);
+
                     SquareOnlinePaymentService.SquareOnlinePaymentResponse onlinePaymentResponse =
-                        squareOnlinePaymentService.createPaymentLink(updated.getParkingFeeCents(), paymentDescription);
+                        squareOnlinePaymentService.createPaymentLink(updated.getParkingFeeCents(), paymentDescription, locationId);
 
                     if (onlinePaymentResponse.isSuccess()) {
                         log.info("💳 在线支付链接创建成功");

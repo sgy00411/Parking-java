@@ -4,10 +4,12 @@ import com.quaer_api.entity.PaymentOrder;
 import com.quaer_api.entity.VehicleRecord;
 import com.quaer_api.repository.PaymentOrderRepository;
 import com.quaer_api.repository.VehicleRecordRepository;
+import com.quaer_api.service.LedDisplayService;
 import com.quaer_api.service.SquareOnlinePaymentService;
 import com.quaer_api.service.SquareTerminalService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.data.domain.Page;
@@ -54,7 +56,29 @@ public class VehicleRecordController {
     @Autowired
     private SquareTerminalService squareTerminalService;
 
-    private static final String SNAPSHOT_BASE_DIR = "D:/停车场/snapshots";
+    @Autowired
+    private LedDisplayService ledDisplayService;
+
+    @Value("${snapshot.base-dir:}")
+    private String snapshotBaseDir;
+
+    /**
+     * 获取快照存储根目录
+     */
+    private String getSnapshotBaseDir() {
+        // 1. 优先使用配置文件中的路径
+        if (snapshotBaseDir != null && !snapshotBaseDir.trim().isEmpty()) {
+            return snapshotBaseDir;
+        }
+
+        // 2. 根据操作系统自动选择默认路径
+        String os = System.getProperty("os.name").toLowerCase();
+        if (os.contains("win")) {
+            return "D:/停车场/snapshots";
+        } else {
+            return "/opt/quaer_api/snapshots";
+        }
+    }
 
     /**
      * 获取车辆记录列表（分页+筛选）
@@ -191,7 +215,7 @@ public class VehicleRecordController {
         try {
             log.info("获取快照图片: parkingLotCode={}, filename={}", parkingLotCode, filename);
 
-            Path filePath = Paths.get(SNAPSHOT_BASE_DIR, parkingLotCode, filename);
+            Path filePath = Paths.get(getSnapshotBaseDir(), parkingLotCode, filename);
             File file = filePath.toFile();
 
             if (!file.exists()) {
@@ -309,13 +333,17 @@ public class VehicleRecordController {
             String terminalPaymentResponse = null;
             boolean terminalSuccess = false;
             try {
-                if (paymentDeviceId != null && !paymentDeviceId.trim().isEmpty()) {
+                // 优先级: 1) 数据库记录中的设备ID 2) 前端传来的设备ID 3) 配置文件默认值
+                if (record.getPaymentDeviceId() != null && !record.getPaymentDeviceId().trim().isEmpty()) {
+                    log.info("📟 使用记录中的支付设备ID: {}", record.getPaymentDeviceId());
+                    terminalPaymentResponse = squareTerminalService.createTerminalCheckout(
+                            record.getParkingFeeCents(), record.getPaymentDeviceId());
+                } else if (paymentDeviceId != null && !paymentDeviceId.trim().isEmpty()) {
+                    log.info("📟 使用前端传入的支付设备ID: {}", paymentDeviceId);
                     terminalPaymentResponse = squareTerminalService.createTerminalCheckout(
                             record.getParkingFeeCents(), paymentDeviceId);
-                } else if (record.getExitPaymentDeviceId() != null) {
-                    terminalPaymentResponse = squareTerminalService.createTerminalCheckout(
-                            record.getParkingFeeCents(), record.getExitPaymentDeviceId());
                 } else {
+                    log.info("📟 使用默认支付设备ID（配置文件）");
                     terminalPaymentResponse = squareTerminalService.createTerminalCheckout(
                             record.getParkingFeeCents());
                 }
@@ -334,8 +362,12 @@ public class VehicleRecordController {
                 String description = "停车费 - " +
                     (record.getEntryPlateNumber() != null ? record.getEntryPlateNumber() : record.getExitPlateNumber());
 
+                // 使用记录中的parking_lot_code作为location_id
+                String locationId = record.getParkingLotCode();
+                log.info("📍 使用记录中的停车场编号作为Location ID: {}", locationId);
+
                 SquareOnlinePaymentService.SquareOnlinePaymentResponse onlineResponse =
-                        squareOnlinePaymentService.createPaymentLink(record.getParkingFeeCents(), description);
+                        squareOnlinePaymentService.createPaymentLink(record.getParkingFeeCents(), description, locationId);
 
                 if (onlineResponse.isSuccess()) {
                     onlinePaymentUrl = onlineResponse.getPaymentUrl();
@@ -448,9 +480,12 @@ public class VehicleRecordController {
                 try {
                     String description = "停车费 - " + (record.getEntryPlateNumber() != null ? record.getEntryPlateNumber() : record.getExitPlateNumber());
 
+                    // 使用记录中的parking_lot_code作为location_id
+                    String locationId = record.getParkingLotCode();
+
                     // 生成支付链接
                     SquareOnlinePaymentService.SquareOnlinePaymentResponse response =
-                            squareOnlinePaymentService.createPaymentLink(record.getParkingFeeCents(), description);
+                            squareOnlinePaymentService.createPaymentLink(record.getParkingFeeCents(), description, locationId);
 
                     if (response.isSuccess()) {
                         // 创建PaymentOrder记录并关联vehicle_record_id
@@ -507,6 +542,129 @@ public class VehicleRecordController {
             Map<String, Object> errorResponse = new HashMap<>();
             errorResponse.put("success", false);
             errorResponse.put("message", "批量生成失败: " + e.getMessage());
+            return ResponseEntity.status(500).body(errorResponse);
+        }
+    }
+
+    /**
+     * 发起LCD支付 - 在LCD屏幕显示支付二维码
+     *
+     * 访问示例：
+     * POST http://localhost:8086/api/vehicle-records/{id}/lcd-payment
+     *
+     * @param id 车辆记录ID
+     * @return 发送结果
+     */
+    @PostMapping("/{id}/lcd-payment")
+    public ResponseEntity<Map<String, Object>> sendLcdPayment(@PathVariable Long id) {
+        try {
+            log.info("========================================");
+            log.info("发起LCD支付: 记录ID={}", id);
+            log.info("========================================");
+
+            // 查找记录
+            VehicleRecord record = vehicleRecordRepository.findById(id)
+                    .orElseThrow(() -> new RuntimeException("记录不存在: " + id));
+
+            // 检查是否有在线支付链接
+            if (record.getOnlinePaymentUrl() == null || record.getOnlinePaymentUrl().trim().isEmpty()) {
+                Map<String, Object> errorResponse = new HashMap<>();
+                errorResponse.put("success", false);
+                errorResponse.put("message", "该记录没有在线支付链接,请先生成支付链接");
+                return ResponseEntity.badRequest().body(errorResponse);
+            }
+
+            // 检查是否有LED屏幕配置
+            if (record.getLedScreenConfig() == null || record.getLedScreenConfig().trim().isEmpty()) {
+                Map<String, Object> errorResponse = new HashMap<>();
+                errorResponse.put("success", false);
+                errorResponse.put("message", "该记录没有LED屏幕配置信息");
+                return ResponseEntity.badRequest().body(errorResponse);
+            }
+
+            // 获取LCD设备CID
+            String ledDeviceCid = record.getLedScreenConfig();
+            log.info("📺 LCD设备CID: {}", ledDeviceCid);
+
+            // 准备显示的文本内容
+            List<com.quaer_api.dto.LedTextItem> textList = new ArrayList<>();
+
+            // 第一行：车牌号（绿色）
+            String plateNumber = record.getEntryPlateNumber() != null ?
+                record.getEntryPlateNumber() : record.getExitPlateNumber();
+            com.quaer_api.dto.LedTextItem line1 = new com.quaer_api.dto.LedTextItem();
+            line1.setLid(0);
+            line1.setText("车牌: " + plateNumber);
+            line1.setColor(com.quaer_api.dto.LedTextColor.green());
+            textList.add(line1);
+
+            // 第二行：停车时长（黄色）
+            String durationText = "时长: ";
+            if (record.getParkingDurationMinutes() != null) {
+                int minutes = record.getParkingDurationMinutes();
+                int hours = minutes / 60;
+                int mins = minutes % 60;
+                if (hours > 0) {
+                    durationText += hours + "小时" + mins + "分钟";
+                } else {
+                    durationText += mins + "分钟";
+                }
+            } else {
+                durationText += "未知";
+            }
+            com.quaer_api.dto.LedTextItem line2 = new com.quaer_api.dto.LedTextItem();
+            line2.setLid(1);
+            line2.setText(durationText);
+            line2.setColor(com.quaer_api.dto.LedTextColor.yellow());
+            textList.add(line2);
+
+            // 第三行：停车费用（红色）
+            String amountText = "金额: ";
+            if (record.getParkingFeeCents() != null) {
+                amountText += "$" + String.format("%.2f", record.getParkingFeeCents() / 100.0);
+            } else {
+                amountText += "$0.00";
+            }
+            com.quaer_api.dto.LedTextItem line3 = new com.quaer_api.dto.LedTextItem();
+            line3.setLid(2);
+            line3.setText(amountText);
+            line3.setColor(com.quaer_api.dto.LedTextColor.red());
+            textList.add(line3);
+
+            // 第四行：请付款（白色）
+            com.quaer_api.dto.LedTextItem line4 = new com.quaer_api.dto.LedTextItem();
+            line4.setLid(3);
+            line4.setText("请扫码付款");
+            line4.setColor(com.quaer_api.dto.LedTextColor.white());
+            textList.add(line4);
+
+            // 创建支付场景请求
+            com.quaer_api.dto.LedPaySceneRequest paySceneRequest =
+                new com.quaer_api.dto.LedPaySceneRequest();
+            paySceneRequest.setShowTime(120);  // 显示120秒（2分钟）
+            paySceneRequest.setQrcode(record.getOnlinePaymentUrl());
+            paySceneRequest.setVoice("");  // 不使用语音（空字符串）
+            paySceneRequest.setTextList(textList);
+
+            // 发送到指定的LCD屏幕设备
+            ledDisplayService.showPaySceneToDevice(ledDeviceCid, paySceneRequest);
+
+            log.info("✅ LCD支付界面已发送到设备: {}", ledDeviceCid);
+            log.info("========================================");
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("message", "LCD支付界面已发送");
+            response.put("ledDeviceCid", ledDeviceCid);
+            response.put("paymentUrl", record.getOnlinePaymentUrl());
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("发起LCD支付失败", e);
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("success", false);
+            errorResponse.put("message", "发起LCD支付失败: " + e.getMessage());
             return ResponseEntity.status(500).body(errorResponse);
         }
     }

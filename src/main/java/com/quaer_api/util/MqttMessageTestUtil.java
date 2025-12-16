@@ -48,6 +48,7 @@ public class MqttMessageTestUtil {
             message.setEntryWeight(new BigDecimal("25.50"));
             message.setEntrySnapshot("test_snapshot_" + System.currentTimeMillis() + ".jpg");
             message.setTimestamp(LocalDateTime.now().format(DATE_TIME_FORMATTER));
+            message.setUploadPhoto(1);
 
             String jsonMessage = objectMapper.writeValueAsString(message);
 
@@ -86,6 +87,7 @@ public class MqttMessageTestUtil {
             message.setEntryWeight(new BigDecimal("30.20"));
             message.setEntrySnapshot("test_snapshot_update_" + System.currentTimeMillis() + ".jpg");
             message.setTimestamp(LocalDateTime.now().format(DATE_TIME_FORMATTER));
+            message.setUploadPhoto(1);
 
             String jsonMessage = objectMapper.writeValueAsString(message);
 

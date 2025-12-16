@@ -58,4 +58,17 @@ public class MqttEntryMessage {
 
     @JsonProperty("timestamp")
     private String timestamp;
+
+    // 入场设备配置字段
+    @JsonProperty("payment_device_id")
+    private String paymentDeviceId;
+
+    @JsonProperty("led_screen_config")
+    private String ledScreenConfig;
+
+    @JsonProperty("barrier_gate_id")
+    private String barrierGateId;
+
+    @JsonProperty("backup_channel_id")
+    private String backupChannelId;
 }

@@ -34,7 +34,7 @@ public class MqttExitMessage {
     private String exitPlateNumber;
 
     @JsonProperty("exit_time")
-    private String exitTime;  // 不使用，服务器自己计算
+    private String exitTime;
 
     @JsonProperty("exit_camera_ip")
     private String exitCameraIp;
@@ -78,4 +78,17 @@ public class MqttExitMessage {
 
     @JsonProperty("timestamp")
     private String timestamp;
+
+    // 设备配置字段（用于覆盖更新入场时保存的设备配置）
+    @JsonProperty("payment_device_id")
+    private String paymentDeviceId;
+
+    @JsonProperty("led_screen_config")
+    private String ledScreenConfig;
+
+    @JsonProperty("barrier_gate_id")
+    private String barrierGateId;
+
+    @JsonProperty("backup_channel_id")
+    private String backupChannelId;
 }

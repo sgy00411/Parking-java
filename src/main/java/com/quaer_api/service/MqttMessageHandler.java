@@ -30,6 +30,12 @@ public class MqttMessageHandler {
     @org.springframework.context.annotation.Lazy
     private LedDisplayService ledDisplayService;
 
+    @Autowired
+    private MqttMessageDeduplicator messageDeduplicator;
+
+    @Autowired
+    private com.quaer_api.repository.VehicleRecordRepository vehicleRecordRepository;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
@@ -82,50 +88,66 @@ public class MqttMessageHandler {
             String parkingLotCode = extractParkingLotCode(topic);
             log.info("  停车场编号: {}", parkingLotCode);
 
-            // 先解析JSON获取event_type字段
+            // 先解析JSON获取event_type、timestamp等字段
             com.fasterxml.jackson.databind.JsonNode rootNode = objectMapper.readTree(payload);
             String eventType = rootNode.get("event_type").asText();
             String action = rootNode.get("action").asText();
+            String timestamp = rootNode.has("timestamp") ? rootNode.get("timestamp").asText() : null;
 
             if ("entry".equals(eventType)) {
-                // 处理入场消息
+                // 处理入场消息 - 只看 event_type，不限制 action
+                log.info(">>> 检测到入场消息，action: {}", action);
                 MqttEntryMessage entryMessage = objectMapper.readValue(payload, MqttEntryMessage.class);
+
+                // 🚫 去重检查：3分钟内同一停车场+同一车牌+同一方向的消息将被忽略
+                if (messageDeduplicator.isDuplicate(parkingLotCode, entryMessage.getEntryPlateNumber(), "entry", timestamp)) {
+                    log.warn("🚫 入场消息被去重过滤器拦截，已忽略");
+                    return;
+                }
 
                 // 🔒 将快照文件名加入白名单
                 if (entryMessage.getEntrySnapshot() != null && !entryMessage.getEntrySnapshot().trim().isEmpty()) {
                     snapshotWhitelistService.addToWhitelist(entryMessage.getEntrySnapshot());
                 }
 
-                if ("entry_new".equals(action) || "entry_update".equals(action)) {
-                    log.info(">>> 检测到入场消息: {}", action);
-                    boolean success = vehicleRecordService.handleEntryMessage(entryMessage, parkingLotCode);
-                    if (success) {
-                        log.info("✅ 入场消息处理成功");
+                boolean success = vehicleRecordService.handleEntryMessage(entryMessage, parkingLotCode);
+                if (success) {
+                    log.info("✅ 入场消息处理成功");
+
+                    // 发送入场LED显示
+                    String ledDeviceCid = entryMessage.getLedScreenConfig();
+                    if (ledDeviceCid != null && !ledDeviceCid.trim().isEmpty()) {
+                        String plateNumber = entryMessage.getEntryPlateNumber();
+                        log.info(">>> 发送入场LED显示 | LED设备: {} | 车牌: {}", ledDeviceCid, plateNumber);
+                        ledDisplayService.sendVehicleEntryToLed(ledDeviceCid, plateNumber, "临时车");
+                        log.info("✅ 入场LED显示发送成功");
                     } else {
-                        log.error("❌ 入场消息处理失败");
+                        log.warn("⚠️ 入场消息中未找到LED设备配置，跳过LED显示");
                     }
                 } else {
-                    log.warn("⚠️ 未知的入场动作类型: {}", action);
+                    log.error("❌ 入场消息处理失败");
                 }
             } else if ("exit".equals(eventType)) {
-                // 处理出场消息
+                // 处理出场消息 - 只看 event_type，不限制 action
+                log.info(">>> 检测到出场消息，action: {}", action);
                 MqttExitMessage exitMessage = objectMapper.readValue(payload, MqttExitMessage.class);
+
+                // 🚫 去重检查：3分钟内同一停车场+同一车牌+同一方向的消息将被忽略
+                if (messageDeduplicator.isDuplicate(parkingLotCode, exitMessage.getExitPlateNumber(), "exit", timestamp)) {
+                    log.warn("🚫 出场消息被去重过滤器拦截，已忽略");
+                    return;
+                }
 
                 // 🔒 将快照文件名加入白名单
                 if (exitMessage.getExitSnapshot() != null && !exitMessage.getExitSnapshot().trim().isEmpty()) {
                     snapshotWhitelistService.addToWhitelist(exitMessage.getExitSnapshot());
                 }
 
-                if ("exit_normal".equals(action) || "exit_only_new".equals(action) || "exit_only_update".equals(action)) {
-                    log.info(">>> 检测到出场消息: {}", action);
-                    boolean success = vehicleRecordService.handleExitMessage(exitMessage, parkingLotCode);
-                    if (success) {
-                        log.info("✅ 出场消息处理成功");
-                    } else {
-                        log.error("❌ 出场消息处理失败");
-                    }
+                boolean success = vehicleRecordService.handleExitMessage(exitMessage, parkingLotCode);
+                if (success) {
+                    log.info("✅ 出场消息处理成功");
                 } else {
-                    log.warn("⚠️ 未知的出场动作类型: {}", action);
+                    log.error("❌ 出场消息处理失败");
                 }
             } else {
                 log.warn("⚠️ 未知的事件类型: {}", eventType);
@@ -169,7 +191,8 @@ public class MqttMessageHandler {
 
         // 处理LED显示请求
         if (topic.contains("/LED")) {
-            handleLedDisplayRequest(payload);
+            String parkingLotCode = extractParkingLotCode(topic);
+            handleLedDisplayRequest(payload, parkingLotCode);
         }
 
         log.info(">>> 其他消息处理完成");
@@ -178,8 +201,9 @@ public class MqttMessageHandler {
     /**
      * 处理LED显示请求
      * @param payload 消息内容
+     * @param parkingLotCode 停车场编号
      */
-    private void handleLedDisplayRequest(String payload) {
+    private void handleLedDisplayRequest(String payload, String parkingLotCode) {
         try {
             log.info(">>> 处理LED显示请求");
 
@@ -189,45 +213,21 @@ public class MqttMessageHandler {
             // 默认LED设备编号
             String ledDeviceCid = "96:6E:6D:27:DC:9D";
 
-            // 尝试从新格式提取LED设备编号
-            if (rootNode.has("led_device_id") && !rootNode.get("led_device_id").isNull()) {
-                String ledDeviceId = rootNode.get("led_device_id").asText();
-                if (ledDeviceId != null && !ledDeviceId.trim().isEmpty()) {
-                    ledDeviceCid = ledDeviceId;
-                }
-            }
-            // 尝试从旧格式提取LED设备编号
-            else if (rootNode.has("exit_devices")) {
-                com.fasterxml.jackson.databind.JsonNode exitDevices = rootNode.get("exit_devices");
-                if (exitDevices.has("led_screen_config")) {
-                    String ledScreenConfig = exitDevices.get("led_screen_config").asText();
+            // 从 device_config.led_screen_config 提取LED设备编号
+            if (rootNode.has("device_config") && !rootNode.get("device_config").isNull()) {
+                com.fasterxml.jackson.databind.JsonNode deviceConfig = rootNode.get("device_config");
+                if (deviceConfig.has("led_screen_config") && !deviceConfig.get("led_screen_config").isNull()) {
+                    String ledScreenConfig = deviceConfig.get("led_screen_config").asText();
                     if (ledScreenConfig != null && !ledScreenConfig.trim().isEmpty()) {
                         ledDeviceCid = ledScreenConfig;
                     }
                 }
             }
 
-            // 提取车牌号（支持新旧格式）
+            // 提取车牌号
             String plateNumber = "";
             if (rootNode.has("plate_number")) {
                 plateNumber = rootNode.get("plate_number").asText();
-            } else if (rootNode.has("plate")) {
-                com.fasterxml.jackson.databind.JsonNode plate = rootNode.get("plate");
-                if (plate.has("plate_number")) {
-                    plateNumber = plate.get("plate_number").asText();
-                }
-            }
-
-            // 提取车辆类型
-            String vehicleType = "临时车";
-            if (rootNode.has("vehicle_type")) {
-                vehicleType = rootNode.get("vehicle_type").asText();
-            }
-
-            // 提取显示文字
-            String displayText = "请稍候";  // 默认值
-            if (rootNode.has("display_text")) {
-                displayText = rootNode.get("display_text").asText();
             }
 
             // 如果车牌号为空，不处理
@@ -238,13 +238,32 @@ public class MqttMessageHandler {
 
             log.info("  LED设备编号: {}", ledDeviceCid);
             log.info("  车牌号: {}", plateNumber);
-            log.info("  车辆类型: {}", vehicleType);
-            log.info("  显示文字: {}", displayText);
+            log.info("  停车场编号: {}", parkingLotCode);
 
-            // 发送LED显示消息
-            ledDisplayService.sendVehicleWelcomeToLed(ledDeviceCid, plateNumber, vehicleType, displayText);
+            // 标准化车牌号（去除连字符）
+            String normalizedPlate = plateNumber.replace("-", "");
 
-            log.info("✅ LED显示请求处理成功");
+            // 查询数据库获取最新的出场记录
+            java.util.Optional<com.quaer_api.entity.VehicleRecord> recordOpt =
+                vehicleRecordRepository.findLatestExitedRecordByParkingLotAndPlate(parkingLotCode, normalizedPlate);
+
+            if (recordOpt.isPresent()) {
+                com.quaer_api.entity.VehicleRecord record = recordOpt.get();
+                Integer durationSeconds = record.getDurationSeconds();
+                Integer parkingFeeCents = record.getParkingFeeCents();
+
+                log.info("  查询到出场记录 | ID: {} | 时长: {}秒 | 费用: {}美分",
+                    record.getId(), durationSeconds, parkingFeeCents);
+
+                // 发送LED显示消息（显示付款信息）
+                ledDisplayService.sendVehicleWelcomeToLed(ledDeviceCid, plateNumber, durationSeconds, parkingFeeCents);
+
+                log.info("✅ LED显示请求处理成功");
+            } else {
+                log.warn("⚠️ 未找到对应的出场记录 | 停车场: {} | 车牌: {}", parkingLotCode, normalizedPlate);
+                // 如果没有找到记录，显示默认值
+                ledDisplayService.sendVehicleWelcomeToLed(ledDeviceCid, plateNumber, 0, 0);
+            }
 
         } catch (Exception e) {
             log.error("❌ 处理LED显示请求失败: {}", e.getMessage(), e);

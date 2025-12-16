@@ -18,9 +18,9 @@ public class VehicleRecord {
     private Long id;
 
     /**
-     * 停车场编号 (从MQTT主题中提取，如 parking/0001/camera 中的 0001)
+     * 停车场编号 (从MQTT主题中提取，如 parking/LEH4X8TFCYSQQ/camera 中的 LEH4X8TFCYSQQ)
      */
-    @Column(name = "parking_lot_code", length = 10)
+    @Column(name = "parking_lot_code", length = 50)
     private String parkingLotCode;
 
     /**
@@ -59,6 +59,19 @@ public class VehicleRecord {
 
     @Column(name = "entry_snapshot", length = 255)
     private String entrySnapshot;
+
+    // ========== 设备配置字段（入场时保存，出场时覆盖更新） ==========
+    @Column(name = "payment_device_id", length = 50)
+    private String paymentDeviceId;
+
+    @Column(name = "led_screen_config", length = 255)
+    private String ledScreenConfig;
+
+    @Column(name = "barrier_gate_id", length = 50)
+    private String barrierGateId;
+
+    @Column(name = "backup_channel_id", length = 50)
+    private String backupChannelId;
 
     // ========== 出场字段 ==========
     @Column(name = "exit_plate_number", length = 18)

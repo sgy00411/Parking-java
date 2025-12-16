@@ -46,4 +46,22 @@ public interface VehicleRecordRepository extends JpaRepository<VehicleRecord, Lo
     Optional<VehicleRecord> findExitOnlyRecordByParkingLotAndPlate(
             @Param("parkingLotCode") String parkingLotCode,
             @Param("normalizedPlate") String normalizedPlate);
+
+    /**
+     * 查询指定停车场+车牌的最新已出场记录（用于LED显示费用）
+     *
+     * @param parkingLotCode 停车场编号
+     * @param normalizedPlate 标准化的车牌号（已去除连字符）
+     * @return 最新的已出场记录
+     */
+    @Query("SELECT v FROM VehicleRecord v " +
+           "WHERE v.parkingLotCode = :parkingLotCode " +
+           "AND (REPLACE(v.exitPlateNumber, '-', '') = :normalizedPlate " +
+           "     OR REPLACE(v.entryPlateNumber, '-', '') = :normalizedPlate) " +
+           "AND v.status = 'exited' " +
+           "AND v.exitTime IS NOT NULL " +
+           "ORDER BY v.exitTime DESC")
+    Optional<VehicleRecord> findLatestExitedRecordByParkingLotAndPlate(
+            @Param("parkingLotCode") String parkingLotCode,
+            @Param("normalizedPlate") String normalizedPlate);
 }
