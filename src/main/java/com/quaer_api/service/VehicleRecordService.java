@@ -42,6 +42,10 @@ public class VehicleRecordService {
     @Autowired
     private SquareProperties squareProperties;
 
+    @Autowired
+    @org.springframework.context.annotation.Lazy
+    private MqttClientService mqttClientService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER =
@@ -132,6 +136,9 @@ public class VehicleRecordService {
                 message.getEntryCameraName(),
                 message.getEntryCameraIp());
 
+            // 🚀 入场成功后自动开闸
+            autoOpenGateForEntry(saved);
+
             return true;
 
         } catch (Exception e) {
@@ -182,6 +189,9 @@ public class VehicleRecordService {
                 message.getEntryCameraName(),
                 message.getEntryCameraIp());
 
+            // 🚀 入场更新成功后自动开闸
+            autoOpenGateForEntry(updated);
+
             return true;
 
         } catch (Exception e) {
@@ -200,10 +210,10 @@ public class VehicleRecordService {
      *
      * @param message MQTT出口消息
      * @param parkingLotCode 停车场编号（从MQTT主题提取）
-     * @return 是否成功处理
+     * @return 更新后的车辆记录，失败返回null
      */
     @Transactional
-    public boolean handleExitMessage(MqttExitMessage message, String parkingLotCode) {
+    public VehicleRecord handleExitMessage(MqttExitMessage message, String parkingLotCode) {
         try {
             log.info("========================================");
             log.info("处理出口消息");
@@ -241,14 +251,14 @@ public class VehicleRecordService {
         } catch (Exception e) {
             log.error("!!! 处理出口消息失败! 车牌: {}, 错误: {}",
                 message.getExitPlateNumber(), e.getMessage(), e);
-            return false;
+            return null;
         }
     }
 
     /**
      * 场景1：正常出场 - 更新入场记录
      */
-    private boolean handleNormalExit(VehicleRecord record, MqttExitMessage message, String parkingLotCode) {
+    private VehicleRecord handleNormalExit(VehicleRecord record, MqttExitMessage message, String parkingLotCode) {
         try {
             String entryPlate = record.getEntryPlateNumber();
             LocalDateTime entryTime = record.getEntryTime();
@@ -471,18 +481,18 @@ public class VehicleRecordService {
                 }
             }
 
-            return true;
+            return updated;
 
         } catch (Exception e) {
             log.error("❌ 处理正常出场失败: {}", e.getMessage(), e);
-            return false;
+            return null;
         }
     }
 
     /**
      * 场景2：异常出口-新建记录
      */
-    private boolean handleExitOnlyNew(MqttExitMessage message, String parkingLotCode) {
+    private VehicleRecord handleExitOnlyNew(MqttExitMessage message, String parkingLotCode) {
         try {
             VehicleRecord record = new VehicleRecord();
 
@@ -517,18 +527,18 @@ public class VehicleRecordService {
                 message.getExitCameraName(),
                 message.getExitCameraIp());
 
-            return true;
+            return saved;
 
         } catch (Exception e) {
             log.error("❌ 新建异常出口记录失败: {}", e.getMessage(), e);
-            return false;
+            return null;
         }
     }
 
     /**
      * 场景3：异常出口-更新记录
      */
-    private boolean handleExitOnlyUpdate(VehicleRecord record, MqttExitMessage message, String parkingLotCode) {
+    private VehicleRecord handleExitOnlyUpdate(VehicleRecord record, MqttExitMessage message, String parkingLotCode) {
         try {
             String oldPlate = record.getExitPlateNumber();
 
@@ -561,11 +571,11 @@ public class VehicleRecordService {
                 message.getExitCameraName(),
                 message.getExitCameraIp());
 
-            return true;
+            return updated;
 
         } catch (Exception e) {
             log.error("❌ 更新异常出口记录失败: {}", e.getMessage(), e);
-            return false;
+            return null;
         }
     }
 
@@ -580,4 +590,74 @@ public class VehicleRecordService {
             return LocalDateTime.now();
         }
     }
+
+    /**
+     * 入场成功后自动开闸
+     * @param vehicleRecord 车辆记录
+     */
+    private void autoOpenGateForEntry(VehicleRecord vehicleRecord) {
+        try {
+            log.info("========================================");
+            log.info("🚀 入场成功，开始自动开闸 | 记录ID: {} | 车牌: {}",
+                vehicleRecord.getId(), vehicleRecord.getEntryPlateNumber());
+
+            // 验证必需字段
+            if (vehicleRecord.getParkingLotCode() == null || vehicleRecord.getParkingLotCode().trim().isEmpty()) {
+                log.warn("⚠️ 自动开闸失败：该记录没有停车场编号(parking_lot_code) | 记录ID: {}", vehicleRecord.getId());
+                return;
+            }
+
+            if (vehicleRecord.getBarrierGateId() == null || vehicleRecord.getBarrierGateId().trim().isEmpty()) {
+                log.warn("⚠️ 自动开闸失败：该记录没有闸机ID(barrier_gate_id) | 记录ID: {}", vehicleRecord.getId());
+                return;
+            }
+
+            // 转换端口号，失败时使用默认值1
+            int channel = 1;  // 默认值
+            if (vehicleRecord.getBackupChannelId() != null && !vehicleRecord.getBackupChannelId().trim().isEmpty()) {
+                try {
+                    channel = Integer.parseInt(vehicleRecord.getBackupChannelId().trim());
+                    log.info("📟 使用记录中的端口号: {}", channel);
+                } catch (NumberFormatException e) {
+                    log.warn("⚠️ 端口号转换失败，使用默认值1: {}", vehicleRecord.getBackupChannelId());
+                    channel = 1;
+                }
+            } else {
+                log.warn("⚠️ 记录中没有端口号，使用默认值1");
+            }
+
+            // 构建MQTT主题: /gate/{parking_lot_code}/{barrier_gate_id}/get
+            String topic = String.format("/gate/%s/%s/get",
+                    vehicleRecord.getParkingLotCode(),
+                    vehicleRecord.getBarrierGateId());
+
+            log.info("📡 MQTT主题: {}", topic);
+
+            // 生成唯一ID
+            String messageId = java.util.UUID.randomUUID().toString();
+
+            // 构建MQTT消息：常开端口，闭合2秒后自动断开
+            // closetime: 关闭继电器，2秒后自动打开（常开端口闭合2秒）
+            String mqttMessage = String.format(
+                    "{\"id\":\"%s\",\"type\":\"modbus\",\"msg\":{\"cmd\":\"closetime\",\"addr\":255,\"channel\":%d,\"time\":20}}",
+                    messageId,
+                    channel
+            );
+
+            log.info("📨 MQTT消息: {}", mqttMessage);
+            log.info("  命令: closetime (常开端口闭合2秒)");
+            log.info("  端口: {}", channel);
+            log.info("  时长: 20 (2秒)");
+
+            // 发送MQTT消息
+            mqttClientService.publish(topic, mqttMessage);
+
+            log.info("✅ 入场自动开闸指令已发送到MQTT");
+            log.info("========================================");
+
+        } catch (Exception e) {
+            log.error("❌ 入场自动开闸失败 | 记录ID: {} | 错误: {}", vehicleRecord.getId(), e.getMessage(), e);
+        }
+    }
 }
+

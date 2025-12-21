@@ -27,6 +27,7 @@ public interface PaymentOrderRepository extends JpaRepository<PaymentOrder, Long
     // 分页查询方法
     Page<PaymentOrder> findByStatus(String status, Pageable pageable);
     Page<PaymentOrder> findByPaymentSource(String paymentSource, Pageable pageable);
+    Page<PaymentOrder> findByStatusAndPaymentSource(String status, String paymentSource, Pageable pageable);
 
     // ==================== 统计查询方法 ====================
 

@@ -143,9 +143,31 @@ public class MqttMessageHandler {
                     snapshotWhitelistService.addToWhitelist(exitMessage.getExitSnapshot());
                 }
 
-                boolean success = vehicleRecordService.handleExitMessage(exitMessage, parkingLotCode);
-                if (success) {
+                com.quaer_api.entity.VehicleRecord updatedRecord = vehicleRecordService.handleExitMessage(exitMessage, parkingLotCode);
+                if (updatedRecord != null) {
                     log.info("✅ 出场消息处理成功");
+
+                    // 发送出场LED显示 - 显示停车时长和费用
+                    String ledDeviceCid = updatedRecord.getLedScreenConfig();
+                    if (ledDeviceCid != null && !ledDeviceCid.trim().isEmpty()) {
+                        String plateNumber = updatedRecord.getExitPlateNumber();
+                        Integer durationSeconds = updatedRecord.getDurationSeconds();
+                        Integer parkingFeeCents = updatedRecord.getParkingFeeCents();
+
+                        log.info(">>> 发送出场LED显示 | LED设备: {} | 车牌: {} | 时长: {}秒 | 费用: {}美分",
+                            ledDeviceCid, plateNumber, durationSeconds, parkingFeeCents);
+
+                        ledDisplayService.sendVehicleWelcomeToLed(
+                            ledDeviceCid,
+                            plateNumber,
+                            durationSeconds != null ? durationSeconds : 0,
+                            parkingFeeCents != null ? parkingFeeCents : 0
+                        );
+
+                        log.info("✅ 出场LED显示发送成功");
+                    } else {
+                        log.warn("⚠️ 出场消息中未找到LED设备配置，跳过LED显示");
+                    }
                 } else {
                     log.error("❌ 出场消息处理失败");
                 }
@@ -189,10 +211,10 @@ public class MqttMessageHandler {
         log.info("  主题: {}", topic);
         log.info("  内容: {}", payload);
 
-        // 处理LED显示请求
+        // 不处理 parking/XXX/LED 主题消息（这是摄像头系统的反馈消息，不需要处理）
         if (topic.contains("/LED")) {
-            String parkingLotCode = extractParkingLotCode(topic);
-            handleLedDisplayRequest(payload, parkingLotCode);
+            log.info("⚠️ 收到LED反馈消息，忽略处理");
+            return;
         }
 
         log.info(">>> 其他消息处理完成");

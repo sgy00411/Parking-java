@@ -35,32 +35,65 @@ public class PaymentOrderController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int pageSize,
             @RequestParam(required = false) String status,
-            @RequestParam(required = false) String paymentSource
+            @RequestParam(required = false) String paymentSource,
+            @RequestParam(required = false) String squarePaymentId,
+            @RequestParam(required = false) String orderId
     ) {
         try {
-            log.info("查询支付订单列表: page={}, pageSize={}, status={}, paymentSource={}",
-                page, pageSize, status, paymentSource);
+            log.info("查询支付订单列表: page={}, pageSize={}, status={}, paymentSource={}, squarePaymentId={}, orderId={}",
+                page, pageSize, status, paymentSource, squarePaymentId, orderId);
 
+            // 按创建时间降序排序（最新的在前面）
             Pageable pageable = PageRequest.of(
                 page - 1,
                 pageSize,
-                Sort.by(Sort.Direction.DESC, "id")
+                Sort.by(Sort.Direction.DESC, "createdAt")
             );
 
             Page<PaymentOrder> paymentOrderPage;
 
             // 根据条件查询
-            if (status != null && !status.isEmpty()) {
+            if (squarePaymentId != null && !squarePaymentId.trim().isEmpty()) {
+                // 如果提供了支付ID，直接按支付ID查询
+                Optional<PaymentOrder> order = paymentOrderRepository.findBySquarePaymentId(squarePaymentId);
+                if (order.isPresent()) {
+                    paymentOrderPage = new org.springframework.data.domain.PageImpl<>(
+                        java.util.Collections.singletonList(order.get()),
+                        pageable,
+                        1
+                    );
+                } else {
+                    paymentOrderPage = Page.empty(pageable);
+                }
+            } else if (orderId != null && !orderId.trim().isEmpty()) {
+                // 如果提供了订单ID，直接按订单ID查询
+                Optional<PaymentOrder> order = paymentOrderRepository.findByOrderId(orderId);
+                if (order.isPresent()) {
+                    paymentOrderPage = new org.springframework.data.domain.PageImpl<>(
+                        java.util.Collections.singletonList(order.get()),
+                        pageable,
+                        1
+                    );
+                } else {
+                    paymentOrderPage = Page.empty(pageable);
+                }
+            } else if (status != null && !status.trim().isEmpty() && paymentSource != null && !paymentSource.trim().isEmpty()) {
+                // 同时按状态和支付来源查询
+                paymentOrderPage = paymentOrderRepository.findByStatusAndPaymentSource(status, paymentSource, pageable);
+            } else if (status != null && !status.trim().isEmpty()) {
+                // 按状态查询
                 paymentOrderPage = paymentOrderRepository.findByStatus(status, pageable);
-            } else if (paymentSource != null && !paymentSource.isEmpty()) {
+            } else if (paymentSource != null && !paymentSource.trim().isEmpty()) {
+                // 按支付来源查询
                 paymentOrderPage = paymentOrderRepository.findByPaymentSource(paymentSource, pageable);
             } else {
+                // 查询全部
                 paymentOrderPage = paymentOrderRepository.findAll(pageable);
             }
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
-            response.put("data", paymentOrderPage.getContent());
+            response.put("records", paymentOrderPage.getContent());
             response.put("total", paymentOrderPage.getTotalElements());
             response.put("currentPage", page);
             response.put("totalPages", paymentOrderPage.getTotalPages());
@@ -93,7 +126,7 @@ public class PaymentOrderController {
             if (paymentOrder.isPresent()) {
                 Map<String, Object> response = new HashMap<>();
                 response.put("success", true);
-                response.put("data", paymentOrder.get());
+                response.put("record", paymentOrder.get());
                 return ResponseEntity.ok(response);
             } else {
                 Map<String, Object> errorResponse = new HashMap<>();

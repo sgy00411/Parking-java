@@ -284,43 +284,44 @@ public class LedDisplayService {
         line1.setColor(LedTextColor.green());
         textList.add(line1);
 
-        // 第二行：固定文本 "Time Parked:" （黄色）
+        // 第二行：固定文本 "Please Pay:" （黄色）
         LedTextItem line2 = new LedTextItem();
         line2.setLid(1);
-        line2.setText("Time Parked:");
+        line2.setText("Please Pay:");
         line2.setColor(LedTextColor.yellow());
         textList.add(line2);
 
-        // 第三行：停车时长 "XX hrs XX mins" （白色）
+        // 第三行：费用 "$XX.XX" （红色）
         LedTextItem line3 = new LedTextItem();
         line3.setLid(2);
-        if (durationSeconds != null && durationSeconds > 0) {
-            int hours = durationSeconds / 3600;
-            int minutes = (durationSeconds % 3600) / 60;
-            line3.setText(String.format("%d hrs %d mins", hours, minutes));
+        if (parkingFeeCents != null && parkingFeeCents > 0) {
+            // 将美分转换为美元显示（美分 ÷ 100 = 美元）
+            double dollars = parkingFeeCents / 100.0;
+            line3.setText(String.format("$%.2f", dollars));
         } else {
-            line3.setText("0 hrs 0 mins");
+            line3.setText("$0.00");
         }
-        line3.setColor(LedTextColor.white());
+        line3.setColor(LedTextColor.red());
         textList.add(line3);
 
-        // 第四行：固定文本 "Please Pay:" （黄色）
+        // 第四行：固定文本 "Time Parked:" （黄色）
         LedTextItem line4 = new LedTextItem();
         line4.setLid(3);
-        line4.setText("Please Pay:");
+        line4.setText("Time Parked:");
         line4.setColor(LedTextColor.yellow());
         textList.add(line4);
 
-        // 第五行：费用 "$XX.XX" （红色）
+        // 第五行：停车时长 "XX hrs XX mins" （白色）
         LedTextItem line5 = new LedTextItem();
         line5.setLid(4);
-        if (parkingFeeCents != null && parkingFeeCents > 0) {
-            // 直接显示原始数值（已经是美分）
-            line5.setText(String.format("$%d", parkingFeeCents));
+        if (durationSeconds != null && durationSeconds > 0) {
+            int hours = durationSeconds / 3600;
+            int minutes = (durationSeconds % 3600) / 60;
+            line5.setText(String.format("%d hrs %d mins", hours, minutes));
         } else {
-            line5.setText("$0");
+            line5.setText("0 hrs 0 mins");
         }
-        line5.setColor(LedTextColor.red());
+        line5.setColor(LedTextColor.white());
         textList.add(line5);
 
         // 创建消息并发送到指定LED设备
@@ -328,7 +329,7 @@ public class LedDisplayService {
         message.put("device_cid", ledDeviceCid);  // 使用指定的LED设备编号
 
         Map<String, Object> config = new HashMap<>();
-        config.put("show_time", 60);
+        config.put("show_time", 120);
         config.put("voice", "Please Pay");
         config.put("text_list", textList);
 
@@ -362,10 +363,10 @@ public class LedDisplayService {
         line2.setColor(LedTextColor.green());
         textList.add(line2);
 
-        // 第三行：车辆类型（映射为英文）（黄色）
+        // 第三行：固定文本 "Pay Parking" （黄色）
         LedTextItem line3 = new LedTextItem();
         line3.setLid(2);
-        line3.setText(mapVehicleTypeToEnglish(vehicleType));
+        line3.setText("Pay Parking");
         line3.setColor(LedTextColor.yellow());
         textList.add(line3);
 
@@ -381,8 +382,60 @@ public class LedDisplayService {
         message.put("device_cid", ledDeviceCid);  // 使用指定的LED设备编号
 
         Map<String, Object> config = new HashMap<>();
-        config.put("show_time", 60);
+        config.put("show_time", 120);
         config.put("voice", "Welcome");
+        config.put("text_list", textList);
+
+        message.put("config", config);
+
+        // 发送到指定LED设备的主题
+        String topic = getPrivateTopicForDevice(ledDeviceCid);
+        sendMqttMessage(topic, message);
+    }
+
+    /**
+     * 发送车辆支付成功信息到指定LED设备
+     * @param ledDeviceCid LED设备编号
+     * @param licensePlate 车牌号
+     */
+    public void sendVehiclePaymentSuccessToLed(String ledDeviceCid, String licensePlate) {
+        List<LedTextItem> textList = new ArrayList<>();
+
+        // 第一行：固定文本 "License Plate#" （白色）
+        LedTextItem line1 = new LedTextItem();
+        line1.setLid(0);
+        line1.setText("License Plate#");
+        line1.setColor(LedTextColor.white());
+        textList.add(line1);
+
+        // 第二行：车牌号（绿色）
+        LedTextItem line2 = new LedTextItem();
+        line2.setLid(1);
+        line2.setText(licensePlate);
+        line2.setColor(LedTextColor.green());
+        textList.add(line2);
+
+        // 第三行：固定文本 "PAID" （黄色）
+        LedTextItem line3 = new LedTextItem();
+        line3.setLid(2);
+        line3.setText("PAID");
+        line3.setColor(LedTextColor.yellow());
+        textList.add(line3);
+
+        // 第四行：固定文本 "Vehicle Released" （绿色）
+        LedTextItem line4 = new LedTextItem();
+        line4.setLid(3);
+        line4.setText("Vehicle Released");
+        line4.setColor(LedTextColor.green());
+        textList.add(line4);
+
+        // 创建消息并发送到指定LED设备
+        Map<String, Object> message = createBaseMessage("template", "start_passing_scene");
+        message.put("device_cid", ledDeviceCid);  // 使用指定的LED设备编号
+
+        Map<String, Object> config = new HashMap<>();
+        config.put("show_time", 120);
+        config.put("voice", "Payment Successful");
         config.put("text_list", textList);
 
         message.put("config", config);
@@ -421,5 +474,70 @@ public class LedDisplayService {
 
         // 默认返回临时车
         return "Pay Parking";
+    }
+
+    /**
+     * 发送开闸指令到指定闸机设备
+     * 根据广告屏通信协议，通过MQTT发送开闸命令
+     *
+     * @param barrierGateId 闸机设备ID
+     */
+    public void sendOpenGateCommand(String barrierGateId) {
+        Map<String, Object> message = createBaseMessage("template", "open_gate");
+        message.put("barrier_gate_id", barrierGateId);
+
+        // 发送到指定闸机设备的私有主题
+        String topic = getPrivateTopicForDevice(barrierGateId);
+        sendMqttMessage(topic, message);
+
+        log.info("✅ 开闸指令已发送到设备: {}", barrierGateId);
+    }
+
+    /**
+     * 发送开闸指令到指定闸机设备（带车辆信息）
+     *
+     * @param barrierGateId 闸机设备ID
+     * @param licensePlate 车牌号
+     * @param vehicleType 车辆类型
+     */
+    public void sendOpenGateCommandWithInfo(String barrierGateId, String licensePlate, String vehicleType) {
+        List<LedTextItem> textList = new ArrayList<>();
+
+        // 第一行：固定文本 "Gate Opening" （绿色）
+        LedTextItem line1 = new LedTextItem();
+        line1.setLid(0);
+        line1.setText("Gate Opening");
+        line1.setColor(LedTextColor.green());
+        textList.add(line1);
+
+        // 第二行：车牌号（白色）
+        LedTextItem line2 = new LedTextItem();
+        line2.setLid(1);
+        line2.setText(licensePlate != null ? licensePlate : "Manual Release");
+        line2.setColor(LedTextColor.white());
+        textList.add(line2);
+
+        // 第三行：固定文本 "Please Pass" （黄色）
+        LedTextItem line3 = new LedTextItem();
+        line3.setLid(2);
+        line3.setText("Please Pass");
+        line3.setColor(LedTextColor.yellow());
+        textList.add(line3);
+
+        // 创建开闸消息
+        Map<String, Object> message = createBaseMessage("template", "open_gate");
+        message.put("barrier_gate_id", barrierGateId);
+
+        Map<String, Object> config = new HashMap<>();
+        config.put("show_time", 10);  // 显示10秒
+        config.put("voice", "Gate Opening");
+        config.put("text_list", textList);
+        message.put("config", config);
+
+        // 发送到指定闸机设备的私有主题
+        String topic = getPrivateTopicForDevice(barrierGateId);
+        sendMqttMessage(topic, message);
+
+        log.info("✅ 开闸指令已发送到设备: {}, 车牌: {}", barrierGateId, licensePlate);
     }
 }

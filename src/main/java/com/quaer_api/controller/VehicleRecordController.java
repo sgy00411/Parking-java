@@ -5,6 +5,7 @@ import com.quaer_api.entity.VehicleRecord;
 import com.quaer_api.repository.PaymentOrderRepository;
 import com.quaer_api.repository.VehicleRecordRepository;
 import com.quaer_api.service.LedDisplayService;
+import com.quaer_api.service.MqttClientService;
 import com.quaer_api.service.SquareOnlinePaymentService;
 import com.quaer_api.service.SquareTerminalService;
 import lombok.extern.slf4j.Slf4j;
@@ -59,6 +60,9 @@ public class VehicleRecordController {
     @Autowired
     private LedDisplayService ledDisplayService;
 
+    @Autowired
+    private MqttClientService mqttClientService;
+
     @Value("${snapshot.base-dir:}")
     private String snapshotBaseDir;
 
@@ -91,14 +95,15 @@ public class VehicleRecordController {
             @RequestParam(value = "plateNumber", required = false) String plateNumber,
             @RequestParam(value = "parkingLotCode", required = false) String parkingLotCode,
             @RequestParam(value = "startDate", required = false) String startDate,
-            @RequestParam(value = "endDate", required = false) String endDate
+            @RequestParam(value = "endDate", required = false) String endDate,
+            @RequestParam(value = "paymentStatus", required = false) String paymentStatus
     ) {
         try {
-            log.info("获取车辆记录列表: page={}, pageSize={}, status={}, plateNumber={}, parkingLotCode={}, startDate={}, endDate={}",
-                    page, pageSize, status, plateNumber, parkingLotCode, startDate, endDate);
+            log.info("获取车辆记录列表: page={}, pageSize={}, status={}, plateNumber={}, parkingLotCode={}, startDate={}, endDate={}, paymentStatus={}",
+                    page, pageSize, status, plateNumber, parkingLotCode, startDate, endDate, paymentStatus);
 
-            // 创建分页对象（页码从0开始）
-            Pageable pageable = PageRequest.of(page - 1, pageSize, Sort.by(Sort.Direction.DESC, "id"));
+            // 创建分页对象（页码从0开始，按更新时间降序排序）
+            Pageable pageable = PageRequest.of(page - 1, pageSize, Sort.by(Sort.Direction.DESC, "updatedAt"));
 
             // 构建动态查询条件
             Specification<VehicleRecord> spec = (root, query, criteriaBuilder) -> {
@@ -120,6 +125,11 @@ public class VehicleRecordController {
                 // 停车场编号筛选
                 if (parkingLotCode != null && !parkingLotCode.trim().isEmpty()) {
                     predicates.add(criteriaBuilder.equal(root.get("parkingLotCode"), parkingLotCode));
+                }
+
+                // 支付状态筛选
+                if (paymentStatus != null && !paymentStatus.trim().isEmpty()) {
+                    predicates.add(criteriaBuilder.equal(root.get("paymentStatus"), paymentStatus));
                 }
 
                 // 日期范围筛选（基于入场时间或出场时间）
@@ -665,6 +675,105 @@ public class VehicleRecordController {
             Map<String, Object> errorResponse = new HashMap<>();
             errorResponse.put("success", false);
             errorResponse.put("message", "发起LCD支付失败: " + e.getMessage());
+            return ResponseEntity.status(500).body(errorResponse);
+        }
+    }
+
+    /**
+     * 手动开闸 - 发送MQTT开闸指令
+     *
+     * 访问示例：
+     * POST http://localhost:8086/api/vehicle-records/{id}/open-gate
+     *
+     * @param id 车辆记录ID
+     * @return 开闸结果
+     */
+    @PostMapping("/{id}/open-gate")
+    public ResponseEntity<Map<String, Object>> openBarrierGate(@PathVariable Long id) {
+        try {
+            log.info("========================================");
+            log.info("手动开闸: 记录ID={}", id);
+            log.info("========================================");
+
+            // 查找记录
+            VehicleRecord record = vehicleRecordRepository.findById(id)
+                    .orElseThrow(() -> new RuntimeException("记录不存在: " + id));
+
+            // 验证必需字段
+            if (record.getParkingLotCode() == null || record.getParkingLotCode().trim().isEmpty()) {
+                Map<String, Object> errorResponse = new HashMap<>();
+                errorResponse.put("success", false);
+                errorResponse.put("message", "该记录没有停车场编号(parking_lot_code)");
+                return ResponseEntity.badRequest().body(errorResponse);
+            }
+
+            if (record.getBarrierGateId() == null || record.getBarrierGateId().trim().isEmpty()) {
+                Map<String, Object> errorResponse = new HashMap<>();
+                errorResponse.put("success", false);
+                errorResponse.put("message", "该记录没有闸机ID(barrier_gate_id)");
+                return ResponseEntity.badRequest().body(errorResponse);
+            }
+
+            // 转换端口号，失败时使用默认值1
+            int channel = 1;  // 默认值
+            if (record.getBackupChannelId() != null && !record.getBackupChannelId().trim().isEmpty()) {
+                try {
+                    channel = Integer.parseInt(record.getBackupChannelId().trim());
+                    log.info("📟 使用记录中的端口号: {}", channel);
+                } catch (NumberFormatException e) {
+                    log.warn("⚠️ 端口号转换失败，使用默认值1: {}", record.getBackupChannelId());
+                    channel = 1;
+                }
+            } else {
+                log.warn("⚠️ 记录中没有端口号，使用默认值1");
+            }
+
+            // 构建MQTT主题: /gate/{parking_lot_code}/{barrier_gate_id}/get
+            String topic = String.format("/gate/%s/%s/get",
+                    record.getParkingLotCode(),
+                    record.getBarrierGateId());
+
+            log.info("📡 MQTT主题: {}", topic);
+
+            // 生成唯一ID
+            String messageId = java.util.UUID.randomUUID().toString();
+
+            // 构建MQTT消息：常开端口，闭合2秒后自动断开
+            // closetime: 关闭继电器，2秒后自动打开（常开端口闭合2秒）
+            String mqttMessage = String.format(
+                    "{\"id\":\"%s\",\"type\":\"modbus\",\"msg\":{\"cmd\":\"closetime\",\"addr\":255,\"channel\":%d,\"time\":20}}",
+                    messageId,
+                    channel
+            );
+
+            log.info("📨 MQTT消息: {}", mqttMessage);
+            log.info("  命令: closetime (常开端口闭合2秒)");
+            log.info("  端口: {}", channel);
+            log.info("  时长: 20 (2秒)");
+
+            // 发送MQTT消息
+            mqttClientService.publish(topic, mqttMessage);
+
+            log.info("✅ 开闸指令已发送到MQTT");
+            log.info("========================================");
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("success", true);
+            response.put("message", "开闸指令已发送");
+            response.put("recordId", id);
+            response.put("parkingLotCode", record.getParkingLotCode());
+            response.put("barrierGateId", record.getBarrierGateId());
+            response.put("channel", channel);
+            response.put("topic", topic);
+            response.put("messageId", messageId);
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("开闸失败", e);
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("success", false);
+            errorResponse.put("message", "开闸失败: " + e.getMessage());
             return ResponseEntity.status(500).body(errorResponse);
         }
     }

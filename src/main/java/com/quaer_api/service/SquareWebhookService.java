@@ -22,6 +22,8 @@ public class SquareWebhookService {
 
     private final PaymentOrderRepository paymentOrderRepository;
     private final VehicleRecordRepository vehicleRecordRepository;
+    private final LedDisplayService ledDisplayService;
+    private final MqttClientService mqttClientService;
 
     /**
      * 处理 payment.created 事件
@@ -175,6 +177,30 @@ public class SquareWebhookService {
 
                             log.info("✅ 车辆记录支付状态已更新 | 记录ID: {} | 支付ID: {} | 状态: paid",
                                 saved.getVehicleRecordId(), paymentId);
+
+                            // 发送支付成功LED显示
+                            String ledDeviceCid = vehicleRecord.getLedScreenConfig();
+                            String licensePlate = vehicleRecord.getExitPlateNumber() != null ?
+                                vehicleRecord.getExitPlateNumber() : vehicleRecord.getEntryPlateNumber();
+
+                            if (ledDeviceCid != null && !ledDeviceCid.trim().isEmpty() &&
+                                licensePlate != null && !licensePlate.trim().isEmpty()) {
+                                try {
+                                    log.info(">>> 发送支付成功LED显示 | LED设备: {} | 车牌: {}", ledDeviceCid, licensePlate);
+                                    ledDisplayService.sendVehiclePaymentSuccessToLed(ledDeviceCid, licensePlate);
+                                    log.info("✅ 支付成功LED显示发送成功");
+                                } catch (Exception ledEx) {
+                                    log.error("❌ 发送支付成功LED显示失败 | LED设备: {} | 车牌: {} | 错误: {}",
+                                        ledDeviceCid, licensePlate, ledEx.getMessage(), ledEx);
+                                }
+                            } else {
+                                log.warn("⚠️ LED设备配置或车牌号为空，跳过LED显示 | LED设备: {} | 车牌: {}",
+                                    ledDeviceCid, licensePlate);
+                            }
+
+                            // 🚀 支付成功后自动开闸
+                            autoOpenGate(vehicleRecord);
+
                         } else {
                             log.error("❌ 未找到关联的车辆记录 | 车辆记录ID: {}", saved.getVehicleRecordId());
                         }
@@ -368,4 +394,73 @@ public class SquareWebhookService {
             return null;
         }
     }
+
+    /**
+     * 支付成功后自动开闸
+     * @param vehicleRecord 车辆记录
+     */
+    private void autoOpenGate(VehicleRecord vehicleRecord) {
+        try {
+            log.info("========================================");
+            log.info("🚀 支付成功，开始自动开闸 | 记录ID: {}", vehicleRecord.getId());
+
+            // 验证必需字段
+            if (vehicleRecord.getParkingLotCode() == null || vehicleRecord.getParkingLotCode().trim().isEmpty()) {
+                log.warn("⚠️ 自动开闸失败：该记录没有停车场编号(parking_lot_code) | 记录ID: {}", vehicleRecord.getId());
+                return;
+            }
+
+            if (vehicleRecord.getBarrierGateId() == null || vehicleRecord.getBarrierGateId().trim().isEmpty()) {
+                log.warn("⚠️ 自动开闸失败：该记录没有闸机ID(barrier_gate_id) | 记录ID: {}", vehicleRecord.getId());
+                return;
+            }
+
+            // 转换端口号，失败时使用默认值1
+            int channel = 1;  // 默认值
+            if (vehicleRecord.getBackupChannelId() != null && !vehicleRecord.getBackupChannelId().trim().isEmpty()) {
+                try {
+                    channel = Integer.parseInt(vehicleRecord.getBackupChannelId().trim());
+                    log.info("📟 使用记录中的端口号: {}", channel);
+                } catch (NumberFormatException e) {
+                    log.warn("⚠️ 端口号转换失败，使用默认值1: {}", vehicleRecord.getBackupChannelId());
+                    channel = 1;
+                }
+            } else {
+                log.warn("⚠️ 记录中没有端口号，使用默认值1");
+            }
+
+            // 构建MQTT主题: /gate/{parking_lot_code}/{barrier_gate_id}/get
+            String topic = String.format("/gate/%s/%s/get",
+                    vehicleRecord.getParkingLotCode(),
+                    vehicleRecord.getBarrierGateId());
+
+            log.info("📡 MQTT主题: {}", topic);
+
+            // 生成唯一ID
+            String messageId = java.util.UUID.randomUUID().toString();
+
+            // 构建MQTT消息：常开端口，闭合2秒后自动断开
+            // closetime: 关闭继电器，2秒后自动打开（常开端口闭合2秒）
+            String mqttMessage = String.format(
+                    "{\"id\":\"%s\",\"type\":\"modbus\",\"msg\":{\"cmd\":\"closetime\",\"addr\":255,\"channel\":%d,\"time\":20}}",
+                    messageId,
+                    channel
+            );
+
+            log.info("📨 MQTT消息: {}", mqttMessage);
+            log.info("  命令: closetime (常开端口闭合2秒)");
+            log.info("  端口: {}", channel);
+            log.info("  时长: 20 (2秒)");
+
+            // 发送MQTT消息
+            mqttClientService.publish(topic, mqttMessage);
+
+            log.info("✅ 自动开闸指令已发送到MQTT");
+            log.info("========================================");
+
+        } catch (Exception e) {
+            log.error("❌ 自动开闸失败 | 记录ID: {} | 错误: {}", vehicleRecord.getId(), e.getMessage(), e);
+        }
+    }
 }
+

@@ -29,7 +29,7 @@ spring:
 
 # MQTT配置
 mqtt:
-  broker-url: tcp://49.234.8.138:1883
+  broker-url: tcp://127.0.0.1:1883
   client-id: parking_server
   username: parking_device
   password: Device@2025
