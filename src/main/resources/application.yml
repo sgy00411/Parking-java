@@ -52,9 +52,6 @@ mqtt:
 
 # 日志配置
 logging:
-  file:
-    path: D:/停车场/quare_api/logs
-    name: D:/停车场/quare_api/logs/quaer_api.log
   level:
     root: INFO
     com.quaer_api: INFO
