@@ -12,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -208,20 +209,28 @@ public class PaymentOrderController {
 
     /**
      * 根据车辆记录ID查询支付订单
+     * 如果有多条记录，优先返回已完成(COMPLETED)的支付记录
      */
     @GetMapping("/by-vehicle-record/{vehicleRecordId}")
     public ResponseEntity<Map<String, Object>> getPaymentOrderByVehicleRecordId(@PathVariable Long vehicleRecordId) {
         try {
             log.info("根据车辆记录ID查询支付订单: vehicleRecordId={}", vehicleRecordId);
 
-            Optional<PaymentOrder> paymentOrder = paymentOrderRepository.findByVehicleRecordId(vehicleRecordId);
+            // 使用新的查询方法，返回列表并按状态排序（COMPLETED优先）
+            List<PaymentOrder> paymentOrders = paymentOrderRepository.findAllByVehicleRecordIdOrderByStatusAndId(vehicleRecordId);
 
-            if (paymentOrder.isPresent()) {
+            if (!paymentOrders.isEmpty()) {
+                // 返回第一条记录（优先是COMPLETED状态的）
+                PaymentOrder paymentOrder = paymentOrders.get(0);
+                log.info("找到支付订单: id={}, status={}, squarePaymentId={}",
+                    paymentOrder.getId(), paymentOrder.getStatus(), paymentOrder.getSquarePaymentId());
+
                 Map<String, Object> response = new HashMap<>();
                 response.put("success", true);
-                response.put("data", paymentOrder.get());
+                response.put("data", paymentOrder);
                 return ResponseEntity.ok(response);
             } else {
+                log.warn("未找到车辆记录对应的支付订单: vehicleRecordId={}", vehicleRecordId);
                 Map<String, Object> errorResponse = new HashMap<>();
                 errorResponse.put("success", false);
                 errorResponse.put("message", "支付订单不存在");

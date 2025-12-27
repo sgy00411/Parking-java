@@ -170,6 +170,18 @@ public class SquareWebhookService {
                         Optional<VehicleRecord> vehicleRecordOpt = vehicleRecordRepository.findById(saved.getVehicleRecordId());
                         if (vehicleRecordOpt.isPresent()) {
                             VehicleRecord vehicleRecord = vehicleRecordOpt.get();
+
+                            // 🔒 幂等性检查：如果车辆记录已经是paid状态，且squarePaymentId匹配，则跳过后续处理
+                            // 这样可以避免Square的webhook重复推送导致反复发送LED显示和开闸指令
+                            boolean alreadyProcessed = "paid".equals(vehicleRecord.getPaymentStatus()) &&
+                                                      paymentId.equals(vehicleRecord.getSquarePaymentId());
+
+                            if (alreadyProcessed) {
+                                log.info("⏭️ 支付已处理，跳过重复操作 | 记录ID: {} | 支付ID: {} | 状态: paid",
+                                    saved.getVehicleRecordId(), paymentId);
+                                return saved;  // 直接返回，不再处理
+                            }
+
                             vehicleRecord.setPaymentStatus("paid");
                             vehicleRecord.setSquarePaymentId(paymentId);
                             vehicleRecord.setPaymentTime(LocalDateTime.now());
@@ -442,15 +454,15 @@ public class SquareWebhookService {
             // 构建MQTT消息：常开端口，闭合2秒后自动断开
             // closetime: 关闭继电器，2秒后自动打开（常开端口闭合2秒）
             String mqttMessage = String.format(
-                    "{\"id\":\"%s\",\"type\":\"modbus\",\"msg\":{\"cmd\":\"closetime\",\"addr\":255,\"channel\":%d,\"time\":20}}",
+                    "{\"id\":\"%s\",\"type\":\"modbus\",\"msg\":{\"cmd\":\"opentime\",\"addr\":255,\"channel\":%d,\"time\":10}}",
                     messageId,
                     channel
             );
 
             log.info("📨 MQTT消息: {}", mqttMessage);
-            log.info("  命令: closetime (常开端口闭合2秒)");
+            log.info("  命令: opentime (常开端口打开1秒)");
             log.info("  端口: {}", channel);
-            log.info("  时长: 20 (2秒)");
+            log.info("  时长: 10 (1秒)");
 
             // 发送MQTT消息
             mqttClientService.publish(topic, mqttMessage);

@@ -24,6 +24,11 @@ public interface PaymentOrderRepository extends JpaRepository<PaymentOrder, Long
     Optional<PaymentOrder> findByOrderId(String orderId);
     Optional<PaymentOrder> findByVehicleRecordId(Long vehicleRecordId);
 
+    // 根据车辆记录ID查询，优先返回已完成的支付记录
+    @Query("SELECT p FROM PaymentOrder p WHERE p.vehicleRecordId = :vehicleRecordId " +
+           "ORDER BY CASE WHEN p.status = 'COMPLETED' THEN 0 ELSE 1 END, p.id DESC")
+    List<PaymentOrder> findAllByVehicleRecordIdOrderByStatusAndId(@Param("vehicleRecordId") Long vehicleRecordId);
+
     // 分页查询方法
     Page<PaymentOrder> findByStatus(String status, Pageable pageable);
     Page<PaymentOrder> findByPaymentSource(String paymentSource, Pageable pageable);
