@@ -33,9 +33,9 @@ mqtt:
   client-id: parking_server_8087
   username: parking_device
   password: Device@2025
-  # 订阅的主题列表
+  # 订阅的主题列表（使用共享订阅避免重复消费）
   subscribe-topics:
-    - parking/#
+    - $share/parking-group/parking/#
   # 发布的主题
   publish-topic: parking/camera
   # 连接配置
